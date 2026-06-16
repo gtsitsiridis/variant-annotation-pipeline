@@ -6,9 +6,13 @@
 # e.g. the gtex-benchmark variants module: output/variants/variants.vcf.gz
 input_vcf: /data/nasif12/home_if12/tsi/projects/gtex-benchmark/output/variants/variants.vcf.gz
 
-output_dir: output
+# Centralized output, namespaced per the consuming project's convention. Per-tool
+# subdirs are created under here: vcf/ vep/ nmd/ absplice/ ref/ logs/ + annotations.parquet.
+output_dir: /data/nasif12/home_if12/tsi/projects/gtex-benchmark/output/variant_annotation
 
-# Chromosomes to scatter VEP over (per-chrom keeps each job tractable on millions of variants)
+# Optional chromosome filter applied BEFORE chunking (VEP is scattered over fixed-size
+# variant chunks, not per chromosome — see vep.variants_per_chunk). Empty list / unset =
+# annotate the whole input VCF; restrict here for a subset run (e.g. [chr21] for a smoke).
 chromosomes: [chr1, chr2, chr3, chr4, chr5, chr6, chr7, chr8, chr9, chr10, chr11, chr12,
               chr13, chr14, chr15, chr16, chr17, chr18, chr19, chr20, chr21, chr22, chrX]
 
@@ -18,11 +22,14 @@ gtf:   /s/genomes/Gencode/Gencode_human/release_34/gencode.v34.annotation.gtf.gz
 assembly: GRCh38
 
 # ── Ensembl VEP ──────────────────────────────────────────────────────────────────────
+# Gene namespace is pinned to the config `gtf` via VEP `--gtf` (custom annotation) so it
+# matches the consumer exactly (gtex-benchmark = gencode v34) — NOT a prebuilt cache,
+# whose Ensembl release wouldn't match gencode v34. The `prepare_gtf` rule sorts + bgzips
+# + tabixes the GTF for VEP.
 vep:
-  cache_dir: /path/to/ensembl-vep/cache       # vep_install --CACHEDIR
-  cache_version: 110
   plugin_dir: /path/to/ensembl-vep/Plugins    # cloned Ensembl/VEP_plugins
   fork: 8
+  variants_per_chunk: 500000                   # VEP scatter granularity (1 Slurm job / chunk)
 
 # ── VEP plugin reference data (download separately; see README) ───────────────────────
 plugin_data:
@@ -32,16 +39,26 @@ plugin_data:
   spliceai_indel: /path/to/spliceAI/spliceai_scores.raw.indel.hg38.vcf.gz
   primateai:     /path/to/primateAI/PrimateAI_scores_v0.2_GRCh38_sorted.tsv.bgz
   alphamissense: /path/to/AlphaMissense/AlphaMissense_hg38.tsv.gz
-  condel_config: /path/to/ensembl-vep/Plugins/config/Condel/config
+  # (Condel/SIFT/PolyPhen are cache-only → not available in --gtf mode.)
   # LOFTEE (https://github.com/konradjk/loftee, GRCh38 branch)
   loftee_path:            /path/to/loftee
   loftee_human_ancestor:  /path/to/loftee_data/human_ancestor.fa.gz
   loftee_conservation:    /path/to/loftee_data/loftee.sql
   loftee_gerp:            /path/to/loftee_data/gerp_conservation_scores.homo_sapiens.GRCh38.bw
 
+# ── NMD-Scanner (gagneurlab/NMD-Scanner) — NMD escape prediction for PTCs ─────────────
+# Uses the config `gtf` + `fasta`. Installed via pip (envs/nmd.yaml). Refines pLoF: a
+# stop_gained / frameshift that ESCAPES NMD behaves very differently from one that triggers it.
+nmd:
+  enabled: true
+  reassign_exons: false   # set true for hg19 exon numbering
+
 # ── AbSplice (Tier 2; gagneurlab/absplice) ───────────────────────────────────────────
+# AbSplice has its own heavy snakemake workflow (per-tissue SpliceMaps). Run it separately
+# against your absplice checkout, then point `result` at its output table; this pipeline
+# aggregates that to a per-variant AbSplice_DNA (max across `tissues`).
 absplice:
   enabled: true
-  # absplice has its own snakemake workflow + config; point at its run dir / output.
-  config: /path/to/absplice/config.yaml
-  tissues: [Adipose_Subcutaneous, Whole_Blood]   # tissues to score (AbSplice-DNA)
+  result: /path/to/absplice/output/AbSplice_DNA.parquet  # absplice output: variant, tissue, AbSplice_DNA
+  tissues: [Adipose_Subcutaneous, Whole_Blood]            # tissues to aggregate over (empty = all)
+  per_tissue: false                                       # also emit wide AbSplice_DNA_<tissue> columns

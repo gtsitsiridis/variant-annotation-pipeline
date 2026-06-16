@@ -17,12 +17,20 @@ Built in tiers; each tier is an independently runnable Snakemake target.
 ### Tier 1 — VEP + plugins (one VEP pass)
 | Annotation | Source | Output fields |
 |---|---|---|
-| Consequence / IMPACT / gene / transcript / biotype / canonical | VEP core | one-hot `Consequence_*`, `IMPACT`, `Gene`, `Feature`, … |
-| Missense deleteriousness | VEP `--sift --polyphen`, **Condel**, **PrimateAI**, **AlphaMissense** | `sift_score`, `polyphen_score`, `Condel`, `PrimateAI_score`, `am_pathogenicity` |
+| Consequence / IMPACT / gene / transcript / biotype / canonical | VEP core (`--gtf` gencode v34) | one-hot `Consequence_*`, `IMPACT`, `Gene`, `Feature`, exon/intron, … |
+| Missense deleteriousness | **PrimateAI**, **AlphaMissense** | `PrimateAI_score`, `am_pathogenicity` |
 | Deleteriousness (genome-wide) | **CADD** plugin | `CADD_raw`, `CADD_PHRED` |
 | Splicing | **SpliceAI** plugin | `SpliceAI_delta_score` (max of DS_AG/AL/DG/DL) |
 | Loss-of-function confidence | **LOFTEE** plugin | `LoF` (HC/LC), `LoF_filter`, `LoF_flags` |
-| Allele frequency | VEP gnomAD (`--af_gnomadg`) | `gnomADg_AF`, derived `MAF` |
+| **NMD escape** (PTC fate) | **NMD-Scanner** (gagneurlab) | `nmd_escape` + 5 escape rules (last-exon, 50nt-penultimate, long-exon, start-proximal, single-exon), `alt_is_premature`, `start_loss`, `stop_loss` |
+
+Gene namespace is pinned to the config `gtf` (gencode v34) via VEP **`--gtf`** (custom
+annotation), so `Gene`/`Feature` match the consumer. Trade-off of `--gtf` (no cache):
+**SIFT/PolyPhen/Condel and cached gnomAD AF are unavailable** (cache-only) — missense
+deleteriousness comes from AlphaMissense/PrimateAI/CADD, and allele frequency from the
+source variant set (or add a `--custom` gnomAD VCF). Verified live: VEP 113 `--gtf` on a
+chr21 subset yields gencode-versioned `Gene`/`Feature` (`ENSG…​.N`/`ENST…​.N`) parsed
+straight into the variant key.
 
 ### Tier 2 — AbSplice (tissue-specific splicing)
 `AbSplice_DNA` per tissue (gagneurlab/absplice). Pairs naturally with tissue-specific
@@ -41,19 +49,45 @@ joined with the variant-level scores, keyed on `chrom,start,ref,alt` (+ `Feature
 transcript-level fields). Per-chromosome intermediates under `output/`.
 
 ## Run
+Runs go through a Snakemake **Slurm profile** (`profiles/slurm/`, mirroring gtex-benchmark),
+which submits each job to the `standard` partition. VEP/bcftools/tabix come from the
+`vep_v113` conda env put on `PATH` at submit time (inherited by jobs); for a local run
+override with `--executor local --cores N`. Dry-runs (`-n`) just resolve the DAG.
 ```bash
-# 1. configure paths (VEP cache + plugins, plugin data, reference, input VCF)
+# 1. configure paths (VEP plugins, plugin data, reference, input VCF)
 cp config.yaml config.local.yaml   # edit
-# 2. dry-run
-snakemake -n --configfile config.local.yaml
-# 3. run (Slurm; tune profile)
-snakemake --configfile config.local.yaml --cores 16
+export PATH=/opt/modules/i12g/anaconda/envs/vep_v113/bin:$PATH
+PROFILE="--profile profiles/slurm"
+
+# 2. dry-run (resolve the DAG)
+uv run snakemake $PROFILE --configfile config.local.yaml -n
+
+# 3. run the full pipeline on Slurm
+uv run snakemake $PROFILE --configfile config.local.yaml
+
+# 4. quick chr21-only check (VEP tier; NMD/AbSplice off — see config.smoke.yaml)
+uv run snakemake $PROFILE --configfile config.smoke.yaml
+
+# 5. delete only the workflow's declared outputs (scoped; no rm -rf)
+uv run snakemake $PROFILE --configfile config.local.yaml --delete-all-output
 ```
 
 VEP, its cache/plugins, and the plugin reference data (CADD ~300 GB, SpliceAI, PrimateAI,
 AlphaMissense, LOFTEE data) must be installed/downloaded separately — see `config.yaml`
 and `envs/`. AbSplice has its own setup (gagneurlab/absplice).
 
-> Status: scaffold. The Snakemake rules and parsing scripts are wired but **not yet
-> smoke-tested end-to-end** (needs a VEP install + reference data).
->>>>>>> 7f965a4 (Scaffold variant_annotation: dataset-agnostic VEP + plugins + AbSplice (Tier 1+2))
+> Status:
+> - **VEP tier run on real data** — `chunk_vcf` → `vep` (gencode v34 `--gtf` +
+>   CADD/SpliceAI/AlphaMissense/LOFTEE) → `parse_vep` → `merge_vep` → `annotations.parquet`
+>   runs on Slurm (`profiles/slurm`, `vep_v113` env). chr21 produced populated plugin
+>   columns; the full ~30M-variant set runs as ~61 fixed-size chunks.
+> - **Chunk-based scatter** (deeprvat-style): the input VCF is split into
+>   `vep.variants_per_chunk` chunks (checkpoint `chunk_vcf`), one VEP job each — even
+>   parallelism, no big-chromosome straggler. On a cluster, launch the orchestrator itself
+>   as a job (`sbatch --wrap '… snakemake --profile profiles/slurm …'`) so it outlives the
+>   submitting shell.
+> - **Scripts unit-tested** (`parse_vep` / `run_absplice` / `merge`) on synthetic data; DAG
+>   dry-run clean.
+> - **NMD + AbSplice wired but off by default** — they need `nmd-scanner` (install via
+>   conda; its `pyranges` dep won't build against the uv standalone Python) and a
+>   precomputed AbSplice result table, respectively.

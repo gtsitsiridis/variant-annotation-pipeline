@@ -1,0 +1,23 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "filesystem": {
+      "allowWrite": [
+        "/data/nasif12/home_if12/tsi/projects/gtex-benchmark/output/variant_annotation_v2"
+      ]
+    }
+  },
+  "permissions": {
+    "allow": [
+      "Read(//data/nasif12/home_if12/tsi/projects/gtex-benchmark/output/variants/**)",
+      "Read(//s/raw/**)",
+      "Read(//s/genomes/**)",
+      "Read(//s/databases/**)",
+      "Read(//s/project/absplice/**)",
+      "Read(//data/nasif12/home_if12/tsi/projects/deeprvat_wgs/**)"
+    ],
+    "additionalDirectories": [
+      "/data/nasif12/home_if12/tsi/projects/gtex-benchmark/output/variant_annotation_v2"
+    ]
+  }
+}

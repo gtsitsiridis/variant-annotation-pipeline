@@ -1,9 +1,13 @@
-"""Concatenate per-chromosome VEP parquets and merge in AbSplice → annotations.parquet."""
+"""Concatenate per-chunk VEP parquets and merge in NMD/AbSplice → annotations.parquet."""
+
+
+def _vep_chunk_parquets(wildcards):
+    return expand(str(OUT / "vep" / "chunk_{chunk}.vep.parquet"), chunk=chunk_ids())
 
 
 rule merge_vep:
     input:
-        parquets=expand(OUT / "vep" / "{chrom}.vep.parquet", chrom=CHROMS),
+        parquets=_vep_chunk_parquets,
     output:
         parquet=OUT / "vep.parquet",
     conda:
@@ -14,13 +18,15 @@ rule merge_vep:
 
 
 rule merge:
-    """Final per-variant annotation table. AbSplice merged in only if enabled."""
+    """Final annotation table. NMD (variant×transcript) + AbSplice (variant) folded in if enabled."""
     input:
         vep=OUT / "vep.parquet",
+        nmd=(OUT / "nmd.parquet") if NMD else [],
         absplice=(OUT / "absplice" / "absplice.parquet") if ABSPLICE else [],
     output:
         parquet=OUT / "annotations.parquet",
     params:
+        with_nmd=NMD,
         with_absplice=ABSPLICE,
     conda:
         "../../envs/parse.yaml"

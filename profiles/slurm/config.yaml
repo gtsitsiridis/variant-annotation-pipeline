@@ -1,0 +1,27 @@
+# Snakemake Slurm profile (mirrors gtex-benchmark/profiles/slurm).
+#
+#   PATH=/opt/modules/i12g/anaconda/envs/vep_v113/bin:$PATH \
+#     uv run snakemake --profile profiles/slurm --configfile config.local.yaml
+#
+# Turns on the slurm executor and sets fallback resources; per-rule overrides below.
+# Tools (vep, bcftools, tabix) come from the vep_v113 conda env put on PATH at submit time
+# (inherited by jobs via sbatch --export=ALL), like gtex-benchmark's system-tool approach —
+# so no per-rule --use-conda env build is needed. `run:` rules (merge_vep) stay on the host.
+executor: slurm
+jobs: 24                        # max concurrent Slurm jobs (one per chromosome fans out)
+default-resources:
+  slurm_partition: standard
+  mem_mb: 8000
+  runtime: 120                  # minutes
+restart-times: 0
+printshellcmds: true
+
+# Per-rule overrides. VEP is the heavy, forked step.
+set-resources:
+  vep:
+    cpus_per_task: 8            # match config vep.fork
+    mem_mb: 24000              # fork 8 × (CADD/SpliceAI/AlphaMissense/LOFTEE) headroom
+    runtime: 360
+  prepare_gtf:
+    mem_mb: 8000
+    runtime: 60

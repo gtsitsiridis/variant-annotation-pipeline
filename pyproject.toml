@@ -8,6 +8,7 @@ dependencies = [
     "snakemake>=8",
     "polars>=1.0",
     "pyarrow>=15",
+    "snakemake-executor-plugin-slurm>=2.7.1",
 ]
 
 [dependency-groups]
