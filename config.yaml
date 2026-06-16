@@ -1,0 +1,47 @@
+# variant_annotation — example config. Copy to config.local.yaml and edit paths.
+# Heavy reference data lives on disk; only paths are tracked here.
+
+# ── Input: a generic unique-variant VCF (dataset-agnostic) ───────────────────────────
+# bgzipped + tabix-indexed, ID = chrom_start_ref_alt (carried as VEP Uploaded_variation).
+# e.g. the gtex-benchmark variants module: output/variants/variants.vcf.gz
+input_vcf: /data/nasif12/home_if12/tsi/projects/gtex-benchmark/output/variants/variants.vcf.gz
+
+output_dir: output
+
+# Chromosomes to scatter VEP over (per-chrom keeps each job tractable on millions of variants)
+chromosomes: [chr1, chr2, chr3, chr4, chr5, chr6, chr7, chr8, chr9, chr10, chr11, chr12,
+              chr13, chr14, chr15, chr16, chr17, chr18, chr19, chr20, chr21, chr22, chrX]
+
+# ── Reference (match the consumer's gene namespace; gtex-benchmark = gencode v34) ─────
+fasta: /s/genomes/Gencode/Gencode_human/release_34/GRCh38.primary_assembly.genome.fa
+gtf:   /s/genomes/Gencode/Gencode_human/release_34/gencode.v34.annotation.gtf.gz
+assembly: GRCh38
+
+# ── Ensembl VEP ──────────────────────────────────────────────────────────────────────
+vep:
+  cache_dir: /path/to/ensembl-vep/cache       # vep_install --CACHEDIR
+  cache_version: 110
+  plugin_dir: /path/to/ensembl-vep/Plugins    # cloned Ensembl/VEP_plugins
+  fork: 8
+
+# ── VEP plugin reference data (download separately; see README) ───────────────────────
+plugin_data:
+  cadd_snv:      /path/to/cadd/whole_genome_SNVs.tsv.gz
+  cadd_indel:    /path/to/cadd/gnomad.genomes.r3.0.indel.tsv.gz
+  spliceai_snv:  /path/to/spliceAI/spliceai_scores.raw.snv.hg38.vcf.gz
+  spliceai_indel: /path/to/spliceAI/spliceai_scores.raw.indel.hg38.vcf.gz
+  primateai:     /path/to/primateAI/PrimateAI_scores_v0.2_GRCh38_sorted.tsv.bgz
+  alphamissense: /path/to/AlphaMissense/AlphaMissense_hg38.tsv.gz
+  condel_config: /path/to/ensembl-vep/Plugins/config/Condel/config
+  # LOFTEE (https://github.com/konradjk/loftee, GRCh38 branch)
+  loftee_path:            /path/to/loftee
+  loftee_human_ancestor:  /path/to/loftee_data/human_ancestor.fa.gz
+  loftee_conservation:    /path/to/loftee_data/loftee.sql
+  loftee_gerp:            /path/to/loftee_data/gerp_conservation_scores.homo_sapiens.GRCh38.bw
+
+# ── AbSplice (Tier 2; gagneurlab/absplice) ───────────────────────────────────────────
+absplice:
+  enabled: true
+  # absplice has its own snakemake workflow + config; point at its run dir / output.
+  config: /path/to/absplice/config.yaml
+  tissues: [Adipose_Subcutaneous, Whole_Blood]   # tissues to score (AbSplice-DNA)

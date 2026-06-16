@@ -1,0 +1,13 @@
+name: variant_annotation-vep
+channels:
+  - bioconda
+  - conda-forge
+dependencies:
+  - ensembl-vep=110
+  - bcftools
+  - htslib
+  - samtools
+  - perl
+  # LOFTEE perl deps
+  - perl-dbi
+  - perl-bio-db-hts

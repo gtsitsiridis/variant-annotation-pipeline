@@ -1,0 +1,11 @@
+name: variant_annotation-absplice
+channels:
+  - bioconda
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  # AbSplice is installed from gagneurlab/absplice (see its README for the pinned env);
+  # this is a starting point — defer to the absplice repo's own environment file.
+  - pip:
+      - absplice

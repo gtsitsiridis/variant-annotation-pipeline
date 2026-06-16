@@ -1,0 +1,7 @@
+name: variant_annotation-parse
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - polars>=1.0
+  - pyarrow>=15
