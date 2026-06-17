@@ -12,9 +12,9 @@ Modeled on the DeepRVAT annotation pipeline (PMBio/deeprvat, `pipelines/annotati
 
 ## Annotations
 
-Built in tiers; each tier is an independently runnable Snakemake target.
+Each annotation group is an independently runnable Snakemake target.
 
-### Tier 1 — VEP + plugins (one VEP pass)
+### VEP + plugins (one VEP pass)
 | Annotation | Source | Output fields |
 |---|---|---|
 | Consequence / IMPACT / gene / transcript / biotype / canonical | VEP core (`--gtf` gencode v34) | one-hot `Consequence_*`, `IMPACT`, `Gene`, `Feature`, exon/intron, … |
@@ -32,7 +32,7 @@ source variant set (or add a `--custom` gnomAD VCF). Verified live: VEP 113 `--g
 chr21 subset yields gencode-versioned `Gene`/`Feature` (`ENSG…​.N`/`ENST…​.N`) parsed
 straight into the variant key.
 
-### Tier 2 — AbSplice (tissue-specific splicing)
+### AbSplice (tissue-specific splicing)
 `AbSplice_DNA` per tissue (gagneurlab/absplice). Pairs naturally with tissue-specific
 downstream analyses (e.g. GTEx tissues).
 
@@ -65,7 +65,7 @@ uv run snakemake $PROFILE --configfile config.local.yaml -n
 # 3. run the full pipeline on Slurm
 uv run snakemake $PROFILE --configfile config.local.yaml
 
-# 4. quick chr21-only check (VEP tier; NMD/AbSplice off — see config.smoke.yaml)
+# 4. quick chr21-only check (VEP only; NMD/AbSplice off — see config.smoke.yaml)
 uv run snakemake $PROFILE --configfile config.smoke.yaml
 
 # 5. delete only the workflow's declared outputs (scoped; no rm -rf)
@@ -78,15 +78,16 @@ and `envs/`. AbSplice has its own setup (gagneurlab/absplice).
 
 > Status: **run end-to-end on the full 30M-variant GTEx set.** `annotations.parquet` =
 > 30,422,012 unique variants × transcripts (122M rows, chr1–22+X) with CADD, SpliceAI,
-> AlphaMissense, LOFTEE, one-hot consequences, and NMD-escape all populated.
-> - **VEP tier**: `chunk_vcf` → `vep` (gencode v34 `--gtf` + CADD/SpliceAI/AlphaMissense/
+> AlphaMissense, LOFTEE, one-hot consequences, NMD-escape, and AbSplice all populated.
+> - **VEP + plugins**: `chunk_vcf` → `vep` (gencode v34 `--gtf` + CADD/SpliceAI/AlphaMissense/
 >   LOFTEE, `vep_v113` env) → `parse_vep` → `merge_vep`, on Slurm via `profiles/slurm`.
 > - **Chunk-based scatter** (deeprvat-style): the input VCF is split into
 >   `vep.variants_per_chunk` chunks (checkpoint `chunk_vcf`), one VEP job each — even
 >   parallelism, no big-chromosome straggler. On a cluster, launch the orchestrator itself
 >   as a job (`sbatch --wrap '… snakemake --profile profiles/slurm …'`) so it outlives the
 >   submitting shell.
-> - **NMD-Scanner tier**: `nmd_escape` + 5 escape-rule flags, joined onto 100% of
+> - **NMD-Scanner**: `nmd_escape` + 5 escape-rule flags, joined onto 100% of
 >   stop_gained rows (28,787 NMD-escaping PTCs). Needs `nmd-scanner` in a conda env (its
 >   `pyranges`/`pysam` deps; use its **CSV** output — the parquet writer is buggy).
-> - **AbSplice tier** wired but off — needs a precomputed AbSplice result table.
+> - **AbSplice**: `AbSplice_DNA_max` / `AbSplice2_max` from a precomputed AbSplice2 result,
+>   joined per (variant, gene); SNV-only (indels null).

@@ -1,4 +1,4 @@
-"""Tier 1 — Ensembl VEP + plugins, scattered over fixed-size variant chunks.
+"""Ensembl VEP + plugins, scattered over fixed-size variant chunks.
 
 Gene namespace is pinned to the config `gtf` (gencode v34) via VEP `--gtf` custom
 annotation — NOT a prebuilt cache, whose Ensembl release wouldn't match gencode v34. This

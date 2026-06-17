@@ -1,6 +1,6 @@
 """variant_annotation — dataset-agnostic functional annotation of a variant set.
 
-Tier 1 (VEP + plugins) + Tier 2 (AbSplice), assembled into output/annotations.parquet.
+VEP + plugins, NMD-Scanner, and AbSplice, assembled into output/annotations.parquet.
 Configure paths in config.yaml (or --configfile config.local.yaml).
 """
 from pathlib import Path

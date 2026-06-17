@@ -3,7 +3,7 @@
     "enabled": true,
     "filesystem": {
       "allowWrite": [
-        "/data/nasif12/home_if12/tsi/projects/gtex-benchmark/output/variant_annotation_v2"
+        "/data/nasif12/home_if12/tsi/projects/gtex-benchmark/output/variant_annotation"
       ]
     }
   },
@@ -17,7 +17,7 @@
       "Read(//data/nasif12/home_if12/tsi/projects/deeprvat_wgs/**)"
     ],
     "additionalDirectories": [
-      "/data/nasif12/home_if12/tsi/projects/gtex-benchmark/output/variant_annotation_v2"
+      "/data/nasif12/home_if12/tsi/projects/gtex-benchmark/output/variant_annotation"
     ]
   }
 }

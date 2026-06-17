@@ -31,3 +31,7 @@ set-resources:
   nmd:
     mem_mb: 16000             # nmd-scanner loads the whole GTF (~3 GB) plus the chunk
     runtime: 360
+  absplice:
+    cpus_per_task: 4
+    mem_mb: 64000             # scan the ~2B-row precomputed AbSplice2, join to our variants
+    runtime: 240

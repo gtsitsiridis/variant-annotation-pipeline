@@ -53,12 +53,11 @@ nmd:
   enabled: true
   reassign_exons: false   # set true for hg19 exon numbering
 
-# ── AbSplice (Tier 2; gagneurlab/absplice) ───────────────────────────────────────────
-# AbSplice has its own heavy snakemake workflow (per-tissue SpliceMaps). Run it separately
-# against your absplice checkout, then point `result` at its output table; this pipeline
-# aggregates that to a per-variant AbSplice_DNA (max across `tissues`).
+# ── AbSplice (gagneurlab/absplice) ───────────────────────────────────────────────────
+# Running AbSplice from scratch (per-tissue SpliceMaps + SpliceAI + GPU) is out of scope;
+# instead point `result` at a *precomputed* AbSplice2 result — a directory of per-gene
+# `*_max_preds.parquet` datasets. SNV-only; `AbSplice_DNA_max` / `AbSplice2_max` (max over
+# the 49 GTEx tissues) are joined per (variant, gene). Indels get no score.
 absplice:
   enabled: true
-  result: /path/to/absplice/output/AbSplice_DNA.parquet  # absplice output: variant, tissue, AbSplice_DNA
-  tissues: [Adipose_Subcutaneous, Whole_Blood]            # tissues to aggregate over (empty = all)
-  per_tissue: false                                       # also emit wide AbSplice_DNA_<tissue> columns
+  result: /path/to/absplice/snv_avsplice2_all_max_preds/hg38/model_XX  # per-gene *_max_preds.parquet dir
