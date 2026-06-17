@@ -8,8 +8,8 @@ versions differ, so we keep whatever is present.
 
 Invoked by Snakemake (`snakemake.input.tab`, `snakemake.output.parquet`).
 """
-from __future__ import annotations
-
+# NB: no `from __future__ import annotations` — Snakemake prepends a preamble to `script:`
+# files, which would push a future import off line 1 and raise SyntaxError. Needs py>=3.11.
 import polars as pl
 
 # Consequence terms one-hot encoded (the DeepRVAT set; HIGH/MODERATE coding + splicing).
@@ -70,13 +70,24 @@ def main(tab: str, out: str) -> None:
     ]:
         if src in have:
             out_cols.append(pl.col(src).cast(pl.Float64, strict=False).alias(dst))
-    # SpliceAI: max delta across the four scores.
-    ds_present = [c for c in SPLICEAI_DS if c in have]
-    if ds_present:
+    # SpliceAI: max delta across DS_AG/AL/DG/DL. VEP's SpliceAI plugin emits one combined
+    # column `SpliceAI_pred` = SYMBOL|DS_AG|DS_AL|DS_DG|DS_DL|DP_AG|DP_AL|DP_DG|DP_DL (the 4
+    # delta scores are fields 1-4); older setups emit four separate SpliceAI_pred_DS_* cols.
+    if "SpliceAI_pred" in have:
+        ds = pl.col("SpliceAI_pred").str.split("|")
         out_cols.append(
-            pl.max_horizontal([pl.col(c).cast(pl.Float64, strict=False) for c in ds_present])
-            .alias("SpliceAI_delta_score")
+            pl.max_horizontal([
+                ds.list.get(i, null_on_oob=True).cast(pl.Float64, strict=False)
+                for i in (1, 2, 3, 4)
+            ]).alias("SpliceAI_delta_score")
         )
+    else:
+        ds_present = [c for c in SPLICEAI_DS if c in have]
+        if ds_present:
+            out_cols.append(
+                pl.max_horizontal([pl.col(c).cast(pl.Float64, strict=False) for c in ds_present])
+                .alias("SpliceAI_delta_score")
+            )
     # LOFTEE.
     for c in ["LoF", "LoF_filter", "LoF_flags"]:
         if c in have:

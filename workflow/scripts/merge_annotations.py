@@ -7,8 +7,8 @@ VEP and NMD are transcript-level (one row per variant×transcript); AbSplice is 
 Invoked by Snakemake (`snakemake.input.vep`, optional `.nmd`/`.absplice`,
 `snakemake.params.with_nmd`/`with_absplice`, `snakemake.output.parquet`).
 """
-from __future__ import annotations
-
+# NB: no `from __future__ import annotations` — Snakemake prepends a preamble to `script:`
+# files, which would push a future import off line 1 and raise SyntaxError. Needs py>=3.11.
 import polars as pl
 
 KEY = ["chrom", "start", "ref", "alt"]

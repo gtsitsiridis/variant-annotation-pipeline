@@ -8,9 +8,12 @@
 # (inherited by jobs via sbatch --export=ALL), like gtex-benchmark's system-tool approach —
 # so no per-rule --use-conda env build is needed. `run:` rules (merge_vep) stay on the host.
 executor: slurm
-jobs: 24                        # max concurrent Slurm jobs (one per chromosome fans out)
+jobs: 24                        # max concurrent Slurm jobs (the chunks fan out over these)
 default-resources:
   slurm_partition: standard
+  # Exclude old nodes lacking the CPU features (AVX) the polars wheel needs — parse_vep
+  # crashes there with SIGILL (matches deeprvat's run_vep exclude).
+  slurm_extra: "'--exclude=ouga03,ouga04'"
   mem_mb: 8000
   runtime: 120                  # minutes
 restart-times: 0
@@ -25,3 +28,6 @@ set-resources:
   prepare_gtf:
     mem_mb: 8000
     runtime: 60
+  nmd:
+    mem_mb: 16000             # nmd-scanner loads the whole GTF (~3 GB) plus the chunk
+    runtime: 360
