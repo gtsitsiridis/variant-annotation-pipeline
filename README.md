@@ -76,18 +76,17 @@ VEP, its cache/plugins, and the plugin reference data (CADD ~300 GB, SpliceAI, P
 AlphaMissense, LOFTEE data) must be installed/downloaded separately — see `config.yaml`
 and `envs/`. AbSplice has its own setup (gagneurlab/absplice).
 
-> Status:
-> - **VEP tier run on real data** — `chunk_vcf` → `vep` (gencode v34 `--gtf` +
->   CADD/SpliceAI/AlphaMissense/LOFTEE) → `parse_vep` → `merge_vep` → `annotations.parquet`
->   runs on Slurm (`profiles/slurm`, `vep_v113` env). chr21 produced populated plugin
->   columns; the full ~30M-variant set runs as ~61 fixed-size chunks.
+> Status: **run end-to-end on the full 30M-variant GTEx set.** `annotations.parquet` =
+> 30,422,012 unique variants × transcripts (122M rows, chr1–22+X) with CADD, SpliceAI,
+> AlphaMissense, LOFTEE, one-hot consequences, and NMD-escape all populated.
+> - **VEP tier**: `chunk_vcf` → `vep` (gencode v34 `--gtf` + CADD/SpliceAI/AlphaMissense/
+>   LOFTEE, `vep_v113` env) → `parse_vep` → `merge_vep`, on Slurm via `profiles/slurm`.
 > - **Chunk-based scatter** (deeprvat-style): the input VCF is split into
 >   `vep.variants_per_chunk` chunks (checkpoint `chunk_vcf`), one VEP job each — even
 >   parallelism, no big-chromosome straggler. On a cluster, launch the orchestrator itself
 >   as a job (`sbatch --wrap '… snakemake --profile profiles/slurm …'`) so it outlives the
 >   submitting shell.
-> - **Scripts unit-tested** (`parse_vep` / `run_absplice` / `merge`) on synthetic data; DAG
->   dry-run clean.
-> - **NMD + AbSplice wired but off by default** — they need `nmd-scanner` (install via
->   conda; its `pyranges` dep won't build against the uv standalone Python) and a
->   precomputed AbSplice result table, respectively.
+> - **NMD-Scanner tier**: `nmd_escape` + 5 escape-rule flags, joined onto 100% of
+>   stop_gained rows (28,787 NMD-escaping PTCs). Needs `nmd-scanner` in a conda env (its
+>   `pyranges`/`pysam` deps; use its **CSV** output — the parquet writer is buggy).
+> - **AbSplice tier** wired but off — needs a precomputed AbSplice result table.

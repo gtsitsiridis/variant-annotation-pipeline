@@ -57,9 +57,10 @@ rule merge_nmd:
             keep = [c for c in NMD_COLS if c in have]
             frames.append(lf.select(
                 pl.col("chromosome").alias("chrom"),
-                # NMD start_variant is the VCF POS (1-based); our variant key `start` is
-                # 0-based (start = pos - 1). Both read the same chunk VCF, so SNVs/indels match.
-                (pl.col("start_variant").cast(pl.Int64, strict=False) - 1).alias("start"),
+                # NMD-Scanner's start_variant is already 0-based (POS-1) — the same coordinate
+                # as our VEP variant key — so use it directly. Verified: VCF POS 69869 ->
+                # ID chr1_69868_T_A -> VEP start 69868 == NMD start_variant 69868.
+                pl.col("start_variant").cast(pl.Int64, strict=False).alias("start"),
                 pl.col("ref"), pl.col("alt"),
                 pl.col("transcript_id").alias("Feature"),
                 # Cast to a stable Boolean so empty chunks don't break the concat schema.
