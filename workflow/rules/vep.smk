@@ -73,6 +73,22 @@ def _plugin_args() -> str:
 PLUGIN_ARGS = _plugin_args()
 
 
+rule build_canonical:
+    """Derive the canonical transcript per gene from the GTF. VEP `--canonical` is inert in
+    `--gtf` mode (VEP 113 only sets CANONICAL from an `Ensembl_canonical` tag, which gencode
+    v34 predates), so the VEP CANONICAL column is empty. We rebuild it the same way the
+    gtex-benchmark consumer does (MANE_Select else best appris_principal_N) and join it onto
+    the VEP output by transcript in `merge` — CANONICAL is variant-independent, no VEP rerun."""
+    input:
+        gtf=config["gtf"],
+    output:
+        parquet=REF / "canonical.parquet",
+    conda:
+        "../../envs/parse.yaml"
+    script:
+        "../scripts/build_canonical.py"
+
+
 rule prepare_gtf:
     """Sort + bgzip + tabix the gencode GTF for VEP `--gtf` (custom annotation)."""
     input:

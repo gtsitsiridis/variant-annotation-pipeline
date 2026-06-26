@@ -28,7 +28,11 @@ Gene namespace is pinned to the config `gtf` (gencode v34) via VEP **`--gtf`** (
 annotation), so `Gene`/`Feature` match the consumer. Trade-off of `--gtf` (no cache):
 **SIFT/PolyPhen/Condel and cached gnomAD AF are unavailable** (cache-only) — missense
 deleteriousness comes from AlphaMissense/PrimateAI/CADD, and allele frequency from the
-source variant set (or add a `--custom` gnomAD VCF). Verified live: VEP 113 `--gtf` on a
+source variant set (or add a `--custom` gnomAD VCF). VEP's `--canonical` is likewise inert
+in `--gtf` mode — VEP 113 sets canonical only from an `Ensembl_canonical` GTF tag, which
+gencode v34 predates — so `CANONICAL` is reconstructed from the GTF (`MANE_Select` else best
+`appris_principal_N`, the same rule as the gtex-benchmark consumer) and joined onto the VEP
+output by transcript in `merge` (no VEP rerun). Verified live: VEP 113 `--gtf` on a
 chr21 subset yields gencode-versioned `Gene`/`Feature` (`ENSG…​.N`/`ENST…​.N`) parsed
 straight into the variant key.
 

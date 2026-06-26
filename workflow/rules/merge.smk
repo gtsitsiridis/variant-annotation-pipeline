@@ -21,6 +21,7 @@ rule merge:
     """Final annotation table. NMD (variant×transcript) + AbSplice (variant) folded in if enabled."""
     input:
         vep=OUT / "vep.parquet",
+        canonical=REF / "canonical.parquet",
         nmd=(OUT / "nmd.parquet") if NMD else [],
         absplice=(OUT / "absplice" / "absplice.parquet") if ABSPLICE else [],
     output:

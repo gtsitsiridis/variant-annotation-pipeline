@@ -22,8 +22,13 @@ def _one(path) -> str | None:
     return path or None
 
 
-def main(vep: str, out: str, nmd: str | None, absplice: str | None) -> None:
+def main(vep: str, out: str, canonical: str, nmd: str | None, absplice: str | None) -> None:
     lf = pl.scan_parquet(vep)
+    # VEP's CANONICAL is empty in --gtf mode; replace it with the GTF-derived flag, joined by
+    # transcript (`Feature`). "YES" for the gene's canonical transcript, null otherwise.
+    if "CANONICAL" in lf.collect_schema().names():
+        lf = lf.drop("CANONICAL")
+    lf = lf.join(pl.scan_parquet(canonical), on="Feature", how="left")
     if nmd:
         lf = lf.join(pl.scan_parquet(nmd), on=KEY + ["Feature"], how="left")
     if absplice:
@@ -43,6 +48,7 @@ if __name__ == "__main__":
     main(
         smk.input.vep,
         smk.output.parquet,
+        smk.input.canonical,
         _one(smk.input.nmd) if smk.params.with_nmd else None,
         _one(smk.input.absplice) if smk.params.with_absplice else None,
     )
