@@ -105,11 +105,15 @@ rule prepare_gtf:
 
 
 checkpoint chunk_vcf:
-    """Split the (optionally chrom-filtered) input VCF into fixed-size bgzipped chunks of
+    """Split the deep-tier ANALYSIS_SET into fixed-size bgzipped chunks of
     `vep.variants_per_chunk` variants each. Each chunk is a contiguous, position-sorted slice
-    (header re-attached), tabix-indexed for VEP."""
+    (header re-attached), tabix-indexed for VEP.
+
+    Input is ANALYSIS_SET (the small track narrowed to config `deep.window` by select.smk) —
+    NOT the full input_vcf — so the heavy plugins only run where they can score. nmd.smk reads
+    the same chunks, so it inherits the analysis set too."""
     input:
-        vcf=config["input_vcf"],
+        vcf=ANALYSIS_SET,
     output:
         chunkdir=directory(CHUNKS),
     params:

@@ -5,3 +5,4 @@ dependencies:
   - python=3.12
   - polars>=1.0
   - pyarrow>=15
+  - duckdb>=1.0          # parse_fastvep CSQ explode + E2G interval overlap

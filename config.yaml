@@ -5,6 +5,8 @@
 # bgzipped + tabix-indexed, ID = chrom_start_ref_alt (carried as VEP Uploaded_variation).
 # e.g. the gtex-benchmark variants module: output/variants/variants.vcf.gz
 input_vcf: /data/nasif12/home_if12/tsi/projects/gtex-benchmark/output/variants/variants.vcf.gz
+# Optional SV track (Tier 0 fastVEP only — ID=sv_id; fastVEP is ID-agnostic). Omit to skip.
+sv_vcf:    /data/nasif12/home_if12/tsi/projects/gtex-benchmark/output/variants/sv_variants.vcf.gz
 
 # Centralized output, namespaced per the consuming project's convention. Per-tool
 # subdirs are created under here: vcf/ vep/ nmd/ absplice/ ref/ logs/ + annotations.parquet.
@@ -19,7 +21,23 @@ chromosomes: [chr1, chr2, chr3, chr4, chr5, chr6, chr7, chr8, chr9, chr10, chr11
 # ── Reference (match the consumer's gene namespace; gtex-benchmark = gencode v34) ─────
 fasta: /s/genomes/Gencode/Gencode_human/release_34/GRCh38.primary_assembly.genome.fa
 gtf:   /s/genomes/Gencode/Gencode_human/release_34/gencode.v34.annotation.gtf.gz
+gff3:  /s/genomes/Gencode/Gencode_human/release_34/gencode.v34.annotation.gff3.gz  # Tier 0 fastVEP
 assembly: GRCh38
+
+# ── Tier 0: fastVEP (always on; only needs gff3+fasta) ────────────────────────────────
+# Broad per-transcript consequence/distance over the WHOLE variant set (small + sv tracks).
+# `distance` is the screening window (bump toward 1000000 for the full cis range; output grows
+# ~linearly). Huge temporary CSQ VCFs go to `scratch`.
+fastvep:
+  distance: 5000
+  scratch: /scratch/tmp/tsi/fastvep
+  parse_memory_limit: 64GB
+  parse_threads: 6
+
+# ── Deep-tier selector (the VEP/NMD/AbSplice tier runs on this subset only) ────────────
+deep:
+  enabled: false                 # opt-in: needs the VEP/LOFTEE/plugin reference data below
+  window: 5000                   # keep small-track variants within this bp of a transcript
 
 # ── Ensembl VEP ──────────────────────────────────────────────────────────────────────
 # Gene namespace is pinned to the config `gtf` via VEP `--gtf` (custom annotation) so it
@@ -59,5 +77,20 @@ nmd:
 # `*_max_preds.parquet` datasets. SNV-only; `AbSplice_DNA_max` / `AbSplice2_max` (max over
 # the 49 GTEx tissues) are joined per (variant, gene). Indels get no score.
 absplice:
-  enabled: true
+  enabled: false
   result: /path/to/absplice/snv_avsplice2_all_max_preds/hg38/model_XX  # per-gene *_max_preds.parquet dir
+
+# ── E2G: ENCODE-rE2G enhancer -> gene (hg38, precomputed; per variant) ─────────────────
+# Overlaps variants with ENCODE-rE2G enhancer elements -> target gene + rE2G score, from the
+# on-disk E2G star-schema export (predictions dir + enhancers.parquet; no liftOver). Standalone
+# output e2g/e2g.parquet (grain = variant x target_gene), joined by the consumer on variant_id.
+e2g:
+  enabled: false
+  predictions: /s/raw/e2g/enhancer_gene_predictions   # per-chrom prediction parquets
+  enhancers:   /s/raw/e2g/enhancers.parquet           # enhancer id -> chrom/start/end/class
+  model: ENCODE-rE2G             # vs scE2G
+  score_threshold: 0.5
+  classes: [genic, intergenic]   # distal; drop promoter
+  cell_types: null               # null = all biosamples; or a list of cell_type_id to restrict
+  memory_limit: 32GB
+  threads: 4

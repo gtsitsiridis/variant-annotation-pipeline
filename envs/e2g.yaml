@@ -1,0 +1,8 @@
+name: variant_annotation-e2g
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - polars>=1.0
+  - duckdb>=1.0          # variant x enhancer interval overlap
+  - pyarrow>=15

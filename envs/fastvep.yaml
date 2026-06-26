@@ -1,0 +1,13 @@
+name: variant_annotation-fastvep
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  # Rust toolchain to build the fastvep CLI in post-deploy (needs rustc >= 1.88).
+  - rust>=1.88
+  # C/C++ compiler for any native crate build deps.
+  - cxx-compiler
+  - clang
+  # Provides bgzip / tabix (htslib) and bcftools for fastvep-adjacent VCF rules.
+  - bcftools
+  - htslib
