@@ -8,7 +8,6 @@ genes with neither get no canonical.
 
 Invoked by Snakemake (snakemake.input.gtf, snakemake.output.parquet).
 """
-from __future__ import annotations
 
 import polars as pl
 

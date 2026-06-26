@@ -7,7 +7,6 @@ consequence. Writes one variant_id per line — the next rule subsets the input 
 
 Invoked by Snakemake (snakemake.input.basic, snakemake.output.ids, snakemake.params.window).
 """
-from __future__ import annotations
 
 import polars as pl
 

@@ -20,7 +20,6 @@ variants overlapping no enhancer are omitted (absence == not in an enhancer).
 Invoked by Snakemake (snakemake.input.vcf; snakemake.params.{predictions,enhancers,gtf,model,
 score_threshold,classes,cell_types,memory_limit,threads}; snakemake.output.parquet).
 """
-from __future__ import annotations
 
 import time
 from pathlib import Path

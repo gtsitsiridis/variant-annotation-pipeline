@@ -17,7 +17,6 @@ group_by/unnest OOM'd on that scale; DuckDB spills to its temp_directory robustl
 Invoked by Snakemake (snakemake.input.vcf, snakemake.input.metadata, snakemake.output.parquet,
 snakemake.params.memory_limit, snakemake.params.threads).
 """
-from __future__ import annotations
 
 import time
 from pathlib import Path
