@@ -9,13 +9,16 @@ Consumes the on-disk E2G export (a normalized star schema):
     target_gene_tss, enhancer_gene_distance, score, model, cell_type_id, chromosome[unprefixed])
   - enhancers.parquet: id (== predictions.enhancer_id), chromosome[unprefixed], start, end, class
 
-Joins predictions -> enhancers on enhancer_id to recover the element interval, filters by
-model / score / class / cell type, then overlaps the input VCF variants (the VCF is "chr21",
-the E2G tables are "21" -> stripped on join; the variant 0-based `start` from the
-chrom_start_ref_alt id overlaps the 0-based half-open [enh.start, enh.end)). The unversioned
-`target_gene_id` is mapped to the gencode gtf's versioned gene_id. Output is one row per
-(variant, target_gene) keyed on variant_id, with the max score across the selected cell types;
-variants overlapping no enhancer are omitted (absence == not in an enhancer).
+Predictions are collapsed to **unique (enhancer, gene) pairs** — the MAX rE2G score across all
+biosamples (cell types), with `n_cell_types` recording how many biosamples support the pair.
+This dedup happens BEFORE the overlap, so the (expensive) interval range join runs on unique
+pairs rather than per-biosample rows. `cell_types` (if set) is an optional pre-filter; null =
+all biosamples. Joins predictions -> enhancers on enhancer_id to recover the element interval,
+filters by model / score / class, then overlaps the input VCF variants (the VCF is "chr21", the
+E2G tables are "21" -> stripped on join; the variant 0-based `start` from the chrom_start_ref_alt
+id overlaps the 0-based half-open [enh.start, enh.end)). The unversioned `target_gene_id` is
+mapped to the gencode gtf's versioned gene_id. Output is one row per (variant, target_gene)
+keyed on variant_id; variants overlapping no enhancer are omitted (absence == not in an enhancer).
 
 Invoked by Snakemake (snakemake.input.vcf; snakemake.params.{predictions,enhancers,gtf,model,
 score_threshold,classes,cell_types,memory_limit,threads}; snakemake.output.parquet).
@@ -26,6 +29,12 @@ from pathlib import Path
 
 import duckdb
 import polars as pl
+
+# Variant x enhancer overlap via interval binning: bucket both sides by floor(pos / BIN_SIZE)
+# and hash-equi-join on (chrom, bin) + an exact-overlap filter, instead of a `BETWEEN` range
+# join (DuckDB IEJoin) which is ~50x slower on 30M variants. Enhancers are exploded across the
+# bins they span; a variant sits in exactly one bin, so no double counting.
+BIN_SIZE = 10_000
 
 
 def _gene_map(gtf: str) -> pl.DataFrame:
@@ -62,42 +71,56 @@ def main(vcf, predictions, enhancers, gtf, out, *, model, score_threshold,
 
     pred_glob = str(Path(predictions) / "*.parquet")
     ct, cl = _sql_in(cell_types), _sql_in(classes)
-    pred_where = f"model = '{model}' AND score >= {float(score_threshold)}"
+    # Pre-filter only by model (+ an optional cell-type allowlist). We do NOT keep the biosample
+    # dimension: predictions are collapsed to unique (enhancer, gene) pairs with the MAX score
+    # across biosamples BEFORE the overlap (so the range join runs on far fewer rows), and the
+    # score threshold is applied to that max (HAVING below).
+    pred_where = f"model = '{model}'"
     if ct:
         pred_where += f" AND cell_type_id IN {ct}"
     enh_where = f"WHERE class IN {cl}" if cl else ""
 
     con.execute(f"""
         COPY (
-            WITH preds AS (
-                SELECT enhancer_id, target_gene_id, target_gene_name, target_gene_tss,
-                       score, cell_type_id
+            WITH preds AS (   -- collapse biosamples: one row per (enhancer, gene), max score
+                SELECT enhancer_id, target_gene_id,
+                       any_value(target_gene_name) AS target_gene_name,
+                       any_value(target_gene_tss) AS target_gene_tss,
+                       max(score) AS score,
+                       count(DISTINCT cell_type_id) AS n_cell_types
                 FROM read_parquet('{pred_glob}')
                 WHERE {pred_where}
+                GROUP BY enhancer_id, target_gene_id
+                HAVING max(score) >= {float(score_threshold)}
             ),
             enh AS (
                 SELECT id, chromosome AS chrom, start, "end", class
                 FROM read_parquet('{enhancers}') {enh_where}
             ),
-            eg AS (   -- enhancer interval + the gene/score it predicts
+            eg AS (   -- enhancer interval + the (biosample-collapsed) gene/score it predicts,
+                      -- exploded across the genomic bins it spans (for the equi-join below)
                 SELECT e.chrom, e.start, e."end", e.class, p.target_gene_id,
-                       p.target_gene_name, p.target_gene_tss, p.score, p.cell_type_id
+                       p.target_gene_name, p.target_gene_tss, p.score, p.n_cell_types,
+                       unnest(range(e.start // {BIN_SIZE},
+                                    ((e."end" - 1) // {BIN_SIZE}) + 1)) AS bin
                 FROM preds p JOIN enh e ON p.enhancer_id = e.id
             ),
             v AS (    -- input variants: 0-based start parsed from the chrom_start_ref_alt id
                 SELECT column2 AS variant_id, replace(column0, 'chr', '') AS chrom,
-                       CAST(column1 AS BIGINT) - 1 AS vstart
+                       CAST(column1 AS BIGINT) - 1 AS vstart,
+                       (CAST(column1 AS BIGINT) - 1) // {BIN_SIZE} AS bin
                 FROM read_csv('{vcf}', delim='\t', header=false, comment='#',
                               all_varchar=true, maximum_line_size=10000000)
             ),
-            hits AS (
+            hits AS (   -- hash equi-join on (chrom, bin) then the exact half-open overlap
                 SELECT v.variant_id, eg.target_gene_id, eg.target_gene_name,
                        max(eg.score) AS e2g_score,
                        min(abs(v.vstart - eg.target_gene_tss)) AS distance_to_tss,
                        arbitrary(eg.class) AS enhancer_class,
-                       count(DISTINCT eg.cell_type_id) AS n_cell_types
+                       max(eg.n_cell_types) AS n_cell_types
                 FROM v JOIN eg
-                  ON v.chrom = eg.chrom AND v.vstart >= eg.start AND v.vstart < eg."end"
+                  ON v.chrom = eg.chrom AND v.bin = eg.bin
+                  AND v.vstart >= eg.start AND v.vstart < eg."end"
                 GROUP BY v.variant_id, eg.target_gene_id, eg.target_gene_name
             )
             SELECT h.variant_id,

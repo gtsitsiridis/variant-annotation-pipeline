@@ -85,7 +85,7 @@ absplice:
 # on-disk E2G star-schema export (predictions dir + enhancers.parquet; no liftOver). Standalone
 # output e2g/e2g.parquet (grain = variant x target_gene), joined by the consumer on variant_id.
 e2g:
-  enabled: false
+  enabled: false                 # opt-in (was flipped on for a one-off standalone run)
   predictions: /s/raw/e2g/enhancer_gene_predictions   # per-chrom prediction parquets
   enhancers:   /s/raw/e2g/enhancers.parquet           # enhancer id -> chrom/start/end/class
   model: ENCODE-rE2G             # vs scE2G

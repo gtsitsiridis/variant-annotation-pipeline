@@ -35,3 +35,15 @@ set-resources:
     cpus_per_task: 4
     mem_mb: 64000             # scan the ~2B-row precomputed AbSplice2, join to our variants
     runtime: 240
+  e2g:
+    cpus_per_task: 4          # match config e2g.threads
+    mem_mb: 48000             # DuckDB memory_limit is 32 GB; headroom over that
+    runtime: 240
+  parse_fastvep:
+    cpus_per_task: 6          # match config fastvep.parse_threads
+    mem_mb: 72000             # DuckDB parse_memory_limit 64 GB + headroom
+    runtime: 240
+  fastvep:
+    cpus_per_task: 4
+    mem_mb: 16000
+    runtime: 240
