@@ -1,4 +1,4 @@
-# variant-annotation-pipeline-v2
+# variant-annotation-pipeline
 
 **Dataset-agnostic** functional annotation of a variant set. Takes a generic
 **unique-variant VCF** (`ID = chrom_start_ref_alt`, from any upstream caller — e.g. the
