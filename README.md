@@ -63,7 +63,7 @@ gnomAD AF are unavailable (cache-only); missense via AlphaMissense/PrimateAI/CAD
 `config.yaml` is the template (copy to `config.local.yaml` and edit, or pass config via the
 `module` block — see below). Tier flags: `deep.enabled` / `nmd.enabled` / `absplice.enabled`
 / `e2g.enabled` (Tier 0 always runs). Key blocks: `fastvep` (distance, scratch), `deep`
-(window), `vep` + `plugin_data` (deep reference data), `e2g` (predictions/enhancers dirs,
+(window), `vep` (incl. nested `vep.plugin_data` deep reference data), `e2g` (predictions/enhancers dirs,
 model, score_threshold, classes, cell_types).
 
 ## Usage — standalone
@@ -99,8 +99,8 @@ config holding the pipeline-specific keys, then add the shared refs + seam paths
 ```python
 _VA = config["variant_annotation"]                       # block in the parent's config
 _VA_CFG = {
-    **{k: v for k, v in _VA.items() if k != "repo"},     # chromosomes, fastvep, deep, vep,
-                                                          # plugin_data, nmd, absplice, e2g, …
+    **{k: v for k, v in _VA.items() if k != "repo"},     # chromosomes, fastvep, deep, vep
+                                                          # (incl. vep.plugin_data), nmd, absplice, e2g, …
     "fasta": config["fasta"], "gtf": config["gtf"], "gff3": config["gff3"],
     "input_vcf": f"{VAR}/variants.vcf.gz",
     "sv_vcf":    f"{VAR}/sv_variants.vcf.gz",

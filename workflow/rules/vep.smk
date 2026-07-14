@@ -18,7 +18,7 @@ restrict to canonical transcripts.
 import os
 import sys
 
-VEP_PD = config["plugin_data"]
+VEP_PD = config["vep"]["plugin_data"]
 REF = OUT / "ref"
 CHUNKS = OUT / "vcf"                     # chunk_vcf writes chunk_NNNNN.vcf.gz here
 CHUNK_SIZE = int(config["vep"].get("variants_per_chunk", 500_000))

@@ -48,21 +48,20 @@ vep:
   plugin_dir: /path/to/ensembl-vep/Plugins    # cloned Ensembl/VEP_plugins
   fork: 8
   variants_per_chunk: 500000                   # VEP scatter granularity (1 Slurm job / chunk)
-
-# ── VEP plugin reference data (download separately; see README) ───────────────────────
-plugin_data:
-  cadd_snv:      /path/to/cadd/whole_genome_SNVs.tsv.gz
-  cadd_indel:    /path/to/cadd/gnomad.genomes.r3.0.indel.tsv.gz
-  spliceai_snv:  /path/to/spliceAI/spliceai_scores.raw.snv.hg38.vcf.gz
-  spliceai_indel: /path/to/spliceAI/spliceai_scores.raw.indel.hg38.vcf.gz
-  primateai:     /path/to/primateAI/PrimateAI_scores_v0.2_GRCh38_sorted.tsv.bgz
-  alphamissense: /path/to/AlphaMissense/AlphaMissense_hg38.tsv.gz
-  # (Condel/SIFT/PolyPhen are cache-only → not available in --gtf mode.)
-  # LOFTEE (https://github.com/konradjk/loftee, GRCh38 branch)
-  loftee_path:            /path/to/loftee
-  loftee_human_ancestor:  /path/to/loftee_data/human_ancestor.fa.gz
-  loftee_conservation:    /path/to/loftee_data/loftee.sql
-  loftee_gerp:            /path/to/loftee_data/gerp_conservation_scores.homo_sapiens.GRCh38.bw
+  # ── VEP plugin reference data (download separately; see README) ─────────────────────
+  plugin_data:
+    cadd_snv:      /path/to/cadd/whole_genome_SNVs.tsv.gz
+    cadd_indel:    /path/to/cadd/gnomad.genomes.r3.0.indel.tsv.gz
+    spliceai_snv:  /path/to/spliceAI/spliceai_scores.raw.snv.hg38.vcf.gz
+    spliceai_indel: /path/to/spliceAI/spliceai_scores.raw.indel.hg38.vcf.gz
+    primateai:     /path/to/primateAI/PrimateAI_scores_v0.2_GRCh38_sorted.tsv.bgz
+    alphamissense: /path/to/AlphaMissense/AlphaMissense_hg38.tsv.gz
+    # (Condel/SIFT/PolyPhen are cache-only → not available in --gtf mode.)
+    # LOFTEE (https://github.com/konradjk/loftee, GRCh38 branch)
+    loftee_path:            /path/to/loftee
+    loftee_human_ancestor:  /path/to/loftee_data/human_ancestor.fa.gz
+    loftee_conservation:    /path/to/loftee_data/loftee.sql
+    loftee_gerp:            /path/to/loftee_data/gerp_conservation_scores.homo_sapiens.GRCh38.bw
 
 # ── NMD-Scanner (gagneurlab/NMD-Scanner) — NMD escape prediction for PTCs ─────────────
 # Uses the config `gtf` + `fasta`. Installed via pip (envs/nmd.yaml). Refines pLoF: a
