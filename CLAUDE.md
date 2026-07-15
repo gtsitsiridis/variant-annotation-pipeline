@@ -25,12 +25,15 @@ is distance-independent (top level). Dataset-agnostic: NO freq/svtype — the co
   carries `variant_id`+`variant_type`; `vep_parquet` concats → `distance_<d>/vep.parquet/variant_type=.../`.
   Canonical is NOT merged (join `transcript_metadata` downstream) — so `merge.smk`/`merge_annotations.py`/
   `build_canonical` are **retired/dead**.
-- **NMD / AbSplice / E2G** — still on the old machinery; **PENDING migration** to `<tool>.parquet/
+- **`e2g.smk`** (`e2g.enabled`): standalone (reads `input_vcf` + the ENCODE-rE2G tables, no selection);
+  `annotate_enhancers.py` overlaps variants with enhancers, derives `variant_type` from `variant_id`
+  → `distance_<d>/e2g.parquet/variant_type={SNV,indel}/` (small-only, grain variant×target_gene).
+- **NMD / AbSplice** — still on the old machinery; **PENDING migration** to `<tool>.parquet/
   variant_type`. The Snakefile keeps them in a `_PENDING` guard (enabling one raises a clear error).
 
-`Snakefile`: `include fastvep.smk` always; `if VEP: include select + vep`; nmd/absplice/e2g pending.
-`rule all` = fastVEP partition dirs (+ vep partition dirs if VEP). `include_sv` is rejected on any
-non-fastvep tool.
+`Snakefile`: `include fastvep.smk` always; `if VEP: include select + vep`; `if E2G: include e2g`;
+nmd/absplice pending. `rule all` = fastVEP (+ vep + e2g) partition dirs. `include_sv` is rejected on
+any non-fastvep tool.
 
 ## Gotchas (learned the hard way)
 - **`script:` files must NOT have a line-1 `from __future__ import annotations`** — Snakemake
