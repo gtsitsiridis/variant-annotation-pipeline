@@ -23,18 +23,18 @@ configfile: "config.yaml"
 OUT = Path(config["output_dir"])
 
 # ── Per-tool flags (the retired "deep tier" umbrella is gone) ─────────────────────────
-# fastVEP is the always-on base. Every other tool has its own `enabled` + `distance` +
-# `include_sv`. Each tool writes OUT/<tool>/variant_type={SNV,indel,SV}/ keyed on variant_id.
+# fastVEP is the always-on base. Every other tool has its own `enabled` + `distance`. Each tool
+# writes OUT/<tool>/variant_type={SNV,indel,SV}/ keyed on variant_id. SV annotation is fastVEP-only
+# for now (`fastvep.include_sv`); every other tool is small-variant only.
 VEP = config.get("vep", {}).get("enabled", False)
 NMD = config.get("nmd", {}).get("enabled", False)
 ABSPLICE = config.get("absplice", {}).get("enabled", False)
 E2G = config.get("e2g", {}).get("enabled", False)
 
-# include_sv is only implementable for overlap/consequence tools (fastVEP, VEP, NMD). AbSplice
-# (SNV/indel splice lookup) and e2g (point-variant enhancer overlap) can't score SVs — reject it.
-for _t in ("absplice", "e2g"):
+# SV annotation is fastVEP-only for now. Reject include_sv on any other tool so the flag never lies.
+for _t in ("vep", "nmd", "absplice", "e2g"):
     if config.get(_t, {}).get("include_sv", False):
-        raise ValueError(f"{_t}.include_sv is not supported (no SV annotation for {_t}) — set it false.")
+        raise ValueError(f"{_t}.include_sv is not supported — SV annotation is fastVEP-only. Remove it.")
 
 wildcard_constraints:
     chunk = r"\d+",

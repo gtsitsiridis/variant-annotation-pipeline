@@ -25,10 +25,10 @@ gff3:  /s/genomes/Gencode/Gencode_human/release_34/gencode.v34.annotation.gff3.g
 assembly: GRCh38
 
 # ── Per-tool annotation (the old "deep tier" umbrella is gone) ────────────────────────
-# fastVEP is the always-on base; every other tool has its own `enabled` + `distance` +
-# `include_sv`. Each writes OUT/<tool>/variant_type={SNV,indel,SV}/ keyed on `variant_id`.
-# `include_sv: true` also annotates the SV track — supported for fastVEP / VEP / NMD
-# (overlap + consequence); REJECTED for absplice / e2g (they can't score SVs).
+# fastVEP is the always-on base; every other tool has its own `enabled` + `distance`. Each
+# writes OUT/<tool>/variant_type={SNV,indel,SV}/ keyed on `variant_id`.
+# SV annotation is fastVEP-ONLY for now (`fastvep.include_sv`) — every other tool is
+# small-variant only (setting include_sv on a non-fastvep tool is rejected).
 
 # fastVEP (always on; only needs gff3+fasta). `distance` = screening window (bump toward
 # 1000000 for the full cis range; output grows ~linearly). Huge temp CSQ VCFs go to `scratch`.
@@ -47,7 +47,6 @@ fastvep:
 vep:
   enabled: false                               # opt-in (needs VEP + LOFTEE + plugin reference data)
   distance: 5000                               # VEP --distance (up/downstream) + selection window
-  include_sv: false                            # also annotate the SV track (consequence; plugins score null)
   plugin_dir: /path/to/ensembl-vep/Plugins     # cloned Ensembl/VEP_plugins
   fork: 8
   variants_per_chunk: 500000                   # VEP scatter granularity (1 Slurm job / chunk)
@@ -72,7 +71,6 @@ vep:
 nmd:
   enabled: false
   distance: 5000                               # selection window (variants within this bp of a transcript)
-  include_sv: false                            # also run NMD-Scanner on the SV track (may be limited for symbolic SVs)
   reassign_exons: false   # set true for hg19 exon numbering
 
 # ── AbSplice (gagneurlab/absplice) ───────────────────────────────────────────────────
@@ -82,8 +80,7 @@ nmd:
 # the 49 GTEx tissues) are joined per (variant, gene). Indels get no score.
 absplice:
   enabled: false
-  include_sv: false                            # unsupported (SNV/indel splice lookup only) — must stay false
-  result: /path/to/absplice/snv_avsplice2_all_max_preds/hg38/model_XX  # per-gene *_max_preds.parquet dir
+  result: /path/to/absplice/snv_avsplice2_all_max_preds/hg38/model_XX  # per-gene *_max_preds.parquet dir (SNV/indel only)
 
 # ── E2G: ENCODE-rE2G enhancer -> gene (hg38, precomputed; per variant) ─────────────────
 # Overlaps variants with ENCODE-rE2G enhancer elements -> target gene + rE2G score, from the
@@ -92,8 +89,7 @@ absplice:
 e2g:
   enabled: false                 # opt-in
   distance: 100000               # (reserved) variant-to-enhancer selection window
-  include_sv: false              # unsupported (point-variant enhancer overlap) — must stay false
-  predictions: /s/raw/e2g/enhancer_gene_predictions   # per-chrom prediction parquets
+  predictions: /s/raw/e2g/enhancer_gene_predictions   # per-chrom prediction parquets (small-variant only)
   enhancers:   /s/raw/e2g/enhancers.parquet           # enhancer id -> chrom/start/end/class
   model: ENCODE-rE2G             # vs scE2G
   score_threshold: 0.5
