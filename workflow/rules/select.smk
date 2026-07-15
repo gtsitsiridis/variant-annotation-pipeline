@@ -6,17 +6,18 @@ result keeps the chrom_start_ref_alt ID convention, so the deep rules (vep/nmd/a
 unchanged apart from reading this smaller VCF.
 """
 
-DEEP_WINDOW = config.get("deep", {}).get("window", 5000)
+DEEP_WINDOW = config["distance"]                 # the single pipeline cis window
 ANALYSIS_SET = OUT / "deep" / "analysis_set.vcf.gz"
 
 
 rule select_analysis_set_ids:
-    """Pick variant_ids within the deep window from the small track's basic annotation."""
+    """Pick variant_ids within `distance` of a gene from the fastVEP small partitions."""
     input:
-        basic=BASIC_SMALL,
+        [FASTVEP_DIR / f"variant_type={vt}" for vt in ("SNV", "indel")],
     output:
         ids=OUT / "deep" / "analysis_set.ids.txt",
     params:
+        fastvep_dir=str(FASTVEP_DIR),
         window=DEEP_WINDOW,
     conda:
         "../../envs/parse.yaml"

@@ -9,24 +9,28 @@ adapter) either **standalone** or as a Snakemake **`module`**. GitLab remote
 `gagneurlab/variant-annotation-pipeline-v2`. (⚠️ This **v2** repo superseded an older
 `~/projects/variant_annotation`, which was deleted 2026-06-26 — v2 is canonical.)
 
-## Architecture — tiered funnel (Snakefile gates each tier by a config flag)
-- **Tier 0 `fastvep.smk`** (ALWAYS on; only gff3+fasta): fastVEP over the WHOLE set, per
-  `{track}` — `small` (`input_vcf`, ID=chrom_start_ref_alt) + optional `sv` (`sv_vcf`, ID=sv_id;
-  fastVEP is ID-agnostic). `build_transcript_metadata.py` (symbol/biotype/canonical/tsl) +
-  `parse_fastvep.py` (CSQ explode, DuckDB) → `<track>/basic_annotations.parquet` keyed on
-  `variant_id` (dataset-agnostic: NO freq/variant_type/svtype/`end` — the consumer rejoins those).
-- **deep** (`deep.enabled`): `select.smk` narrows the small track to `deep.window` bp of a
-  transcript → `analysis_set.vcf.gz`; the checkpoint `chunk_vcf` reads THAT (not full input), so
-  chunked VEP (`--gtf`) + plugins (LOFTEE/CADD/SpliceAI/PrimateAI/AlphaMissense) + NMD + AbSplice
-  run only on the narrowed set → `annotations.parquet` (merge spines on chunked vep + canonical).
-  `nmd`/`absplice` independently gated.
-- **E2G** (`e2g.enabled`): `annotate_enhancers.py` overlaps variants with ENCODE-rE2G hg38
-  enhancers → `e2g/e2g.parquet`, grain variant×target_gene. STANDALONE (joined on `variant_id`,
-  NOT merged into the transcript-level annotations — different grain).
+## Architecture — per-tool, distance-keyed (REDESIGNED 2026-07-16; the "deep tier" is gone)
+Each tool has its own `enabled` flag (`fastvep` always-on). ONE top-level **`distance`** drives
+fastVEP `--distance`, the deep-tool variant selection, and VEP `--distance`. Uniform output:
+**`OUT/distance_<distance>/<tool>.parquet/variant_type={SNV,indel,SV}/`** — each hive-partitioned by
+`variant_type`, keyed on **`variant_id`** (`chrom_start_ref_alt` small / `sv_id` SV). `transcript_metadata.parquet`
+is distance-independent (top level). Dataset-agnostic: NO freq/svtype — the consumer rejoins those.
+- **`fastvep.smk`** (ALWAYS on; only gff3+fasta): fastVEP over the whole set per `{track}` — `small`
+  (`input_vcf`) + optional `sv` (`sv_vcf`, gated by `fastvep.include_sv`; **SV is fastVEP-only**).
+  `parse_fastvep.py` splits `small`→`variant_type={SNV,indel}` (ref/alt) and `sv`→`SV` →
+  `distance_<d>/fastvep.parquet/variant_type=.../`. The base annotation + the `distance` selection source.
+- **`vep.smk`** (`vep.enabled`): `select.smk` picks the small set within `distance` of a gene (from
+  fastVEP's `distance` annotation) → `analysis_set.vcf.gz`; `chunk_vcf` → chunked VEP (`--gtf`,
+  `--distance {config.distance}`) + plugins (LOFTEE/CADD/SpliceAI/PrimateAI/AlphaMissense); `parse_vep.py`
+  carries `variant_id`+`variant_type`; `vep_parquet` concats → `distance_<d>/vep.parquet/variant_type=.../`.
+  Canonical is NOT merged (join `transcript_metadata` downstream) — so `merge.smk`/`merge_annotations.py`/
+  `build_canonical` are **retired/dead**.
+- **NMD / AbSplice / E2G** — still on the old machinery; **PENDING migration** to `<tool>.parquet/
+  variant_type`. The Snakefile keeps them in a `_PENDING` guard (enabling one raises a clear error).
 
-`Snakefile`: `include fastvep.smk` always; `if DEEP: include select/vep/(nmd)/merge`;
-`if E2G: include e2g`. `rule all` = per-track basic_annotations (+ annotations.parquet if deep,
-+ e2g/e2g.parquet if e2g).
+`Snakefile`: `include fastvep.smk` always; `if VEP: include select + vep`; nmd/absplice/e2g pending.
+`rule all` = fastVEP partition dirs (+ vep partition dirs if VEP). `include_sv` is rejected on any
+non-fastvep tool.
 
 ## Gotchas (learned the hard way)
 - **`script:` files must NOT have a line-1 `from __future__ import annotations`** — Snakemake

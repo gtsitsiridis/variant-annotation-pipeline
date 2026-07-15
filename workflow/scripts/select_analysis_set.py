@@ -11,9 +11,10 @@ Invoked by Snakemake (snakemake.input.basic, snakemake.output.ids, snakemake.par
 import polars as pl
 
 
-def main(basic: str, out_ids: str, window: int) -> None:
+def main(fastvep_dir: str, out_ids: str, window: int) -> None:
     ids = (
-        pl.scan_parquet(basic)
+        pl.scan_parquet(f"{fastvep_dir}/**/*.parquet", hive_partitioning=True)
+        .filter(pl.col("variant_type").is_in(["SNV", "indel"]))   # small track only
         .filter(
             pl.col("distance").is_null()
             | (pl.col("distance") <= window)
@@ -24,8 +25,8 @@ def main(basic: str, out_ids: str, window: int) -> None:
         .collect()
     )
     ids.write_csv(out_ids, include_header=False)
-    print(f"analysis set: {ids.height:,} variants (deep window = {window} bp)")
+    print(f"analysis set: {ids.height:,} variants (window = {window} bp)")
 
 
 if __name__ == "__main__":
-    main(snakemake.input.basic, snakemake.output.ids, int(snakemake.params.window))  # noqa: F821
+    main(snakemake.params.fastvep_dir, snakemake.output.ids, int(snakemake.params.window))  # noqa: F821

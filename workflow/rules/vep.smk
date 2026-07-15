@@ -73,22 +73,6 @@ def _plugin_args() -> str:
 PLUGIN_ARGS = _plugin_args()
 
 
-rule build_canonical:
-    """Derive the canonical transcript per gene from the GTF. VEP `--canonical` is inert in
-    `--gtf` mode (VEP 113 only sets CANONICAL from an `Ensembl_canonical` tag, which gencode
-    v34 predates), so the VEP CANONICAL column is empty. We rebuild it the same way the
-    gtex-benchmark consumer does (MANE_Select else best appris_principal_N) and join it onto
-    the VEP output by transcript in `merge` — CANONICAL is variant-independent, no VEP rerun."""
-    input:
-        gtf=config["gtf"],
-    output:
-        parquet=REF / "canonical.parquet",
-    conda:
-        "../../envs/parse.yaml"
-    script:
-        "../scripts/build_canonical.py"
-
-
 rule prepare_gtf:
     """Sort + bgzip + tabix the gencode GTF for VEP `--gtf` (custom annotation)."""
     input:
@@ -153,6 +137,7 @@ rule vep:
         fork=config["vep"]["fork"],
         plugins=PLUGIN_ARGS,
         loftee_path=VEP_PD["loftee_path"],
+        distance=config["distance"],       # the single pipeline cis window (was hardcoded 5000)
     conda:
         "../../envs/vep.yaml"
     shell:
@@ -166,13 +151,13 @@ rule vep:
         "vep --gtf {input.gtf} --fasta {input.fasta} "
         "    --dir_plugins {params.plugin_dir} --assembly {params.assembly} "
         "    --fork {params.fork} --force_overwrite --tab --compress_output bgzip --no_stats "
-        "    --symbol --canonical --biotype --numbers --distance 5000 "
+        "    --symbol --canonical --biotype --numbers --distance {params.distance} "
         "    --input_file {input.vcf} --output_file {output.tab} "
         "    {params.plugins}"
 
 
 rule parse_vep:
-    """VEP tab → tidy parquet (one row per variant×transcript), keyed on the variant."""
+    """VEP tab → tidy per-chunk parquet (variant×transcript), carrying variant_id + variant_type."""
     input:
         tab=OUT / "vep" / "chunk_{chunk}.vep.tsv.gz",
     output:
@@ -181,3 +166,30 @@ rule parse_vep:
         "../../envs/parse.yaml"
     script:
         "../scripts/parse_vep.py"
+
+
+# final VEP table: concat the per-chunk parquets and write hive-partitioned by variant_type
+# (small-only; SNV/indel). Keyed on variant_id — the consumer joins transcript_metadata for
+# canonical/biotype if needed (the old canonical-merge / annotations.parquet is retired).
+VEP_DIR = OUT / f"distance_{config['distance']}" / "vep.parquet"
+
+
+def _vep_chunk_parquets(wildcards):
+    return expand(str(OUT / "vep" / "chunk_{chunk}.vep.parquet"), chunk=chunk_ids())
+
+
+rule vep_parquet:
+    input:
+        parquets=_vep_chunk_parquets,
+    output:
+        [directory(VEP_DIR / f"variant_type={vt}") for vt in ("SNV", "indel")],
+    params:
+        out_dir=str(VEP_DIR),
+    run:
+        import polars as pl
+        from pathlib import Path
+        df = pl.concat([pl.scan_parquet(p) for p in input.parquets]).collect(engine="streaming")
+        for vt in ("SNV", "indel"):
+            d = Path(params.out_dir) / f"variant_type={vt}"
+            d.mkdir(parents=True, exist_ok=True)
+            df.filter(pl.col("variant_type") == vt).drop("variant_type").write_parquet(d / "data.parquet")

@@ -51,6 +51,7 @@ def main(tab: str, out: str) -> None:
 
     have = set(cols)
     out_cols = [
+        pl.col("Uploaded_variation").alias("variant_id"),   # join key (chrom_start_ref_alt)
         pl.col("chrom"), pl.col("start"), pl.col("ref"), pl.col("alt"),
     ]
     # Transcript-level categorical fields (keep if present).
@@ -93,7 +94,10 @@ def main(tab: str, out: str) -> None:
         if c in have:
             out_cols.append(pl.col(c))
 
-    df = lf.select(out_cols)
+    df = lf.select(out_cols).with_columns(   # variant_type (for the hive partition) from ref/alt
+        variant_type=pl.when((pl.col("ref").str.len_chars() == 1) & (pl.col("alt").str.len_chars() == 1))
+                       .then(pl.lit("SNV")).otherwise(pl.lit("indel"))
+    )
     # One-hot consequence terms (Consequence is '&'-joined).
     if "Consequence" in have:
         for term in CONSEQUENCES:

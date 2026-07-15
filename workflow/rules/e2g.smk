@@ -8,14 +8,16 @@ joined by the consumer on variant_id (NOT folded into the transcript-level annot
 """
 
 _E2G = config.get("e2g", {})
+E2G_DIR = OUT / f"distance_{config['distance']}" / "e2g.parquet"   # hive by variant_type (small-only)
 
 
 rule e2g:
     input:
         vcf=config["input_vcf"],
     output:
-        parquet=OUT / "e2g" / "e2g.parquet",
+        [directory(E2G_DIR / f"variant_type={vt}") for vt in ("SNV", "indel")],
     params:
+        out_dir=str(E2G_DIR),
         predictions=_E2G["predictions"],          # dir of per-chrom prediction parquets
         enhancers=_E2G["enhancers"],               # enhancers.parquet (id -> chrom/start/end/class)
         gtf=config["gtf"],                         # gencode: unversioned -> versioned gene_id map

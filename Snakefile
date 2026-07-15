@@ -1,20 +1,18 @@
 """variant_annotation — dataset-agnostic functional annotation of a variant set.
 
-A tiered funnel over a generic VCF (small variants ID=chrom_start_ref_alt; SVs ID=sv_id):
+Per-tool annotation over a generic VCF (small variants ID=chrom_start_ref_alt; SVs ID=sv_id),
+under a distance-keyed layout: OUT/distance_<distance>/<tool>.parquet/variant_type=<vtype>/,
+each hive-partitioned by variant_type and keyed on `variant_id`.
 
-  Tier 0  fastVEP        broad per-transcript consequence/distance over the WHOLE set,
-                         per track -> <track>/basic_annotations.parquet   (cheap, ALWAYS on)
-             | select (deep.window) from the small track
-  Deep    VEP + plugins  LOFTEE/CADD/SpliceAI/PrimateAI/AlphaMissense (+ NMD, AbSplice) on the
-                         narrow analysis set (chunked) -> annotations.parquet
-  E2G     ENCODE-rE2G    per-variant enhancer -> target gene + rE2G score -> e2g/e2g.parquet
+  fastVEP   ALWAYS on (only gff3+fasta). Broad per-transcript consequence/distance over the
+            whole set; the only SV-capable tool (fastvep.include_sv). Base for the `distance`
+            selection used by the other tools.  -> distance_<d>/fastvep.parquet/
+  VEP       opt-in (vep.enabled). LOFTEE/CADD/SpliceAI/PrimateAI/AlphaMissense on the small set
+            selected within `distance` of a gene (chunked).  -> distance_<d>/vep.parquet/
+  NMD / AbSplice / E2G   opt-in — PENDING migration to this layout (enabling one errors).
 
-Tier 0 always runs (only needs gff3+fasta). The deep VEP/NMD/AbSplice tier and E2G are opt-in
-via config flags (deep.enabled / nmd.enabled / absplice.enabled / e2g.enabled), each needing
-reference data. E2G is a STANDALONE parquet (grain variant x target_gene) joined by the
-consumer on variant_id, NOT folded into the transcript-level annotations.parquet. Configure
-paths in config.yaml (or --configfile config.local.yaml), or pass config as a Snakemake
-`module`.
+A single top-level `distance` drives fastVEP `--distance`, the selection window, and VEP
+`--distance`. Configure via config.yaml (or --configfile), or pass config as a Snakemake `module`.
 """
 from pathlib import Path
 
@@ -43,16 +41,33 @@ wildcard_constraints:
 
 include: "workflow/rules/fastvep.smk"        # Tier 0 base — always; defines FASTVEP_TARGETS
 
-# NOTE: vep / nmd / absplice / e2g are being migrated to the per-tool <tool>/variant_type=<vtype>
-# layout (carrying variant_id, own distance, include_sv). Until that lands, only fastVEP builds;
-# enabling one of them fails loudly rather than running the old deep-tier machinery.
-_PENDING = [t for t, on in (("vep", VEP), ("nmd", NMD), ("absplice", ABSPLICE), ("e2g", E2G)) if on]
+# fastVEP + VEP are migrated to the per-tool distance_<d>/<tool>.parquet/variant_type layout.
+# VEP selects its (small) analysis set from the fastVEP `distance` annotation, chunks + runs VEP,
+# and writes distance_<d>/vep.parquet/variant_type={SNV,indel}/ keyed on variant_id.
+if VEP:
+    include: "workflow/rules/select.smk"     # ANALYSIS_SET from the fastVEP distance partitions
+    include: "workflow/rules/vep.smk"        # defines VEP_DIR + the vep_parquet target
+if E2G:
+    include: "workflow/rules/e2g.smk"        # standalone (reads input_vcf + ENCODE-rE2G tables); defines E2G_DIR
+
+# nmd / absplice are still pending migration to the new layout; enabling one fails loudly
+# rather than running the retired deep-tier machinery.
+_PENDING = [t for t, on in (("nmd", NMD), ("absplice", ABSPLICE)) if on]
 if _PENDING:
     raise ValueError(
         "tools not yet migrated to the per-tool <tool>/variant_type layout: "
-        + ", ".join(_PENDING) + ". Only fastVEP is available in this build.")
+        + ", ".join(_PENDING) + ". Available: fastVEP, VEP, e2g.")
+
+
+def _targets():
+    t = list(FASTVEP_TARGETS)
+    if VEP:
+        t += [VEP_DIR / f"variant_type={vt}" for vt in ("SNV", "indel")]
+    if E2G:
+        t += [E2G_DIR / f"variant_type={vt}" for vt in ("SNV", "indel")]
+    return [str(x) for x in t]
 
 
 rule all:
     input:
-        [str(p) for p in FASTVEP_TARGETS],
+        _targets(),
