@@ -25,15 +25,17 @@ gff3:  /s/genomes/Gencode/Gencode_human/release_34/gencode.v34.annotation.gff3.g
 assembly: GRCh38
 
 # ── Per-tool annotation (the old "deep tier" umbrella is gone) ────────────────────────
-# fastVEP is the always-on base; every other tool has its own `enabled` + `distance`. Each
-# writes OUT/<tool>/variant_type={SNV,indel,SV}/ keyed on `variant_id`.
-# SV annotation is fastVEP-ONLY for now (`fastvep.include_sv`) — every other tool is
-# small-variant only (setting include_sv on a non-fastvep tool is rejected).
+# fastVEP is the always-on base; every other tool has its own `enabled`. Output layout:
+#   OUT/distance_<distance>/<tool>.parquet/variant_type={SNV,indel,SV}/  (keyed on `variant_id`).
+# SV annotation is fastVEP-ONLY (`fastvep.include_sv`); every other tool is small-variant only
+# (setting include_sv on a non-fastvep tool is rejected).
 
-# fastVEP (always on; only needs gff3+fasta). `distance` = screening window (bump toward
-# 1000000 for the full cis range; output grows ~linearly). Huge temp CSQ VCFs go to `scratch`.
-fastvep:
-  distance: 5000
+# ONE cis window for the whole pipeline: fastVEP --distance + the deep-tier selection threshold +
+# VEP --distance — and it prefixes the output dir (distance_<distance>/) so different runs coexist.
+# Bump toward 1000000 for the full cis range (output grows ~linearly).
+distance: 5000
+
+fastvep:               # always on; only needs gff3+fasta. Huge temp CSQ VCFs go to `scratch`.
   include_sv: true
   scratch: /scratch/tmp/tsi/fastvep
   parse_memory_limit: 64GB
@@ -46,7 +48,6 @@ fastvep:
 # + tabixes the GTF for VEP.
 vep:
   enabled: false                               # opt-in (needs VEP + LOFTEE + plugin reference data)
-  distance: 5000                               # VEP --distance (up/downstream) + selection window
   plugin_dir: /path/to/ensembl-vep/Plugins     # cloned Ensembl/VEP_plugins
   fork: 8
   variants_per_chunk: 500000                   # VEP scatter granularity (1 Slurm job / chunk)
@@ -70,7 +71,6 @@ vep:
 # stop_gained / frameshift that ESCAPES NMD behaves very differently from one that triggers it.
 nmd:
   enabled: false
-  distance: 5000                               # selection window (variants within this bp of a transcript)
   reassign_exons: false   # set true for hg19 exon numbering
 
 # ── AbSplice (gagneurlab/absplice) ───────────────────────────────────────────────────
@@ -88,7 +88,6 @@ absplice:
 # output e2g/e2g.parquet (grain = variant x target_gene), joined by the consumer on variant_id.
 e2g:
   enabled: false                 # opt-in
-  distance: 100000               # (reserved) variant-to-enhancer selection window
   predictions: /s/raw/e2g/enhancer_gene_predictions   # per-chrom prediction parquets (small-variant only)
   enhancers:   /s/raw/e2g/enhancers.parquet           # enhancer id -> chrom/start/end/class
   model: ENCODE-rE2G             # vs scE2G

@@ -12,7 +12,7 @@ stays clean.
 
 # track -> input VCF. `small` is mandatory; `sv` only if sv_vcf is set AND fastvep.include_sv.
 _FASTVEP = config.get("fastvep", {})
-FASTVEP_DISTANCE = _FASTVEP.get("distance", 5000)
+FASTVEP_DISTANCE = config["distance"]            # the single pipeline cis window (also prefixes the output dir)
 FASTVEP_INCLUDE_SV = _FASTVEP.get("include_sv", True)
 TRACK_VCF = {"small": config["input_vcf"]}
 if config.get("sv_vcf") and FASTVEP_INCLUDE_SV:
@@ -22,10 +22,11 @@ TRACKS = list(TRACK_VCF)
 # Huge temporary CSQ VCFs (the small track is ~20 GB) — keep them off the network output dir.
 FASTVEP_SCRATCH = _FASTVEP.get("scratch", str(OUT / "fastvep"))
 
-# Unified output: OUT/fastvep/variant_type={SNV,indel,SV}/<track>.parquet (hive-partitioned).
-# `small` -> {SNV,indel} (split by ref/alt in parse); `sv` -> {SV}. This is the base annotation
-# table every downstream tool + consumer reads (fastvep/**/*.parquet, hive_partitioning=true).
-FASTVEP_DIR = OUT / "fastvep"
+# Output: OUT/distance_<distance>/fastvep.parquet/variant_type={SNV,indel,SV}/<track>.parquet
+# (hive-partitioned). `small` -> {SNV,indel} (split by ref/alt in parse); `sv` -> {SV}. This is the
+# base annotation table every downstream tool + consumer reads
+# (distance_<d>/fastvep.parquet/**/*.parquet, hive_partitioning=true).
+FASTVEP_DIR = OUT / f"distance_{FASTVEP_DISTANCE}" / "fastvep.parquet"
 FASTVEP_PARTS = {"small": ["SNV", "indel"], "sv": ["SV"]}
 # variant_type partition dirs that exist given the configured tracks (Tier-0 targets).
 FASTVEP_TARGETS = [FASTVEP_DIR / f"variant_type={vt}" for tr in TRACKS for vt in FASTVEP_PARTS[tr]]

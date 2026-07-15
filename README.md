@@ -6,126 +6,115 @@ gtex-benchmark `variants` module) and annotates it. Independent of any dataset: 
 *variants*, not GTEx, and is consumed across a repo boundary (e.g. by gtex-benchmark's
 `evaluation` module) either **standalone** or **as a Snakemake `module`**.
 
-## Tiered funnel
+## Per-tool annotation
+
+fastVEP is the always-on base; every other tool is an independent opt-in flag (the old
+"deep tier" umbrella is gone). A **single `distance`** (the cis window) drives fastVEP's
+`--distance`, the deep-tool variant *selection* (via fastVEP's `distance` annotation column),
+and VEP's `--distance`. Output is uniform and **distance-keyed**:
 
 ```
-input_vcf (+ optional sv_vcf)
-   │
-   ├─ Tier 0  fastVEP        broad per-transcript consequence/distance over the WHOLE set,
-   │                         per track (small + SV) — cheap, ALWAYS on, only gff3+fasta
-   │                            → <track>/basic_annotations.parquet  (+ transcript_metadata.parquet)
-   │            │ select.smk (deep.window) from the small track
-   │  deep   VEP + plugins   LOFTEE/CADD/SpliceAI/PrimateAI/AlphaMissense (+ NMD, AbSplice),
-   │                         chunked, on the narrowed analysis_set    → annotations.parquet
-   │
-   └─ E2G    ENCODE-rE2G     per-variant enhancer → target gene + rE2G score (hg38)
-                                                                      → e2g/e2g.parquet
+output_dir/
+  distance_<distance>/
+    fastvep.parquet/variant_type={SNV,indel,SV}/     (ALWAYS — the base annotation)
+    vep.parquet/variant_type={SNV,indel}/            (vep.enabled)
+    nmd.parquet/variant_type={SNV,indel}/            (nmd.enabled)
+    absplice.parquet/variant_type={SNV,indel}/       (absplice.enabled — VEP-dependent, SNV-only)
+    e2g.parquet/variant_type={SNV,indel}/            (e2g.enabled)
+  transcript_metadata.parquet                        (distance-independent, shared)
 ```
 
-- **Tier 0 (fastVEP)** — always on; needs only the gencode **GFF3 + FASTA** (no plugin
-  reference data). Runs per `{track}`: `small` (`input_vcf`, ID=chrom_start_ref_alt) and, if
-  `sv_vcf` is set, `sv` (ID=sv_id; fastVEP is ID-agnostic). It's both the broad annotation
-  layer and the basis for selecting the deep-tier window.
-- **deep tier** (`deep.enabled`) — `select.smk` narrows the small track to variants within
-  `deep.window` bp of a transcript → `analysis_set.vcf.gz`; the VEP scatter (`chunk_vcf`)
-  reads *that*, so the heavy plugins only run where they can score. VEP `--gtf` (gencode
-  namespace) + CADD/SpliceAI/PrimateAI/AlphaMissense/LOFTEE, NMD-Scanner, and a precomputed
-  AbSplice2 lookup are merged into `annotations.parquet`. `nmd`/`absplice` are independently
-  gated.
-- **E2G tier** (`e2g.enabled`) — overlaps the variants with **ENCODE-rE2G** hg38 enhancer
-  elements (the on-disk star-schema export: per-chrom predictions + `enhancers.parquet`),
-  giving each variant its predicted target gene + rE2G score + distance to TSS. Kept a
-  **standalone** parquet (grain = variant × target_gene; the consumer joins it on
-  `variant_id`) — *not* folded into the transcript-level `annotations.parquet`.
+Every per-tool parquet is hive-partitioned by `variant_type` and keyed on **`variant_id`**
+(`chrom_start_ref_alt` for small variants, `sv_id` for SVs) — the single join key. Keying the
+output by distance lets different-window runs coexist.
 
-VEP gene namespace is pinned to the config `gtf` via **`--gtf`** (no cache), so
-`Gene`/`Feature` match the consumer (gencode v34). Trade-off: SIFT/PolyPhen/Condel + cached
-gnomAD AF are unavailable (cache-only); missense via AlphaMissense/PrimateAI/CADD. VEP's
-`--canonical` is inert in `--gtf` mode, so `CANONICAL` is reconstructed from the GTF
-(`build_canonical.py`: MANE_Select else best `appris_principal_N`).
+- **fastVEP** (always on; only needs gencode **GFF3 + FASTA**) — broad per-transcript
+  consequence/distance over the whole set. The **only SV-capable tool** (`fastvep.include_sv`;
+  `sv_vcf` is optional). `small` → `variant_type={SNV,indel}` (split by ref/alt); `sv` →
+  `variant_type=SV`. It is both the base annotation and the source of the `distance` used to
+  select each deep tool's variant set.
+- **VEP + plugins** (`vep.enabled`) — LOFTEE/CADD/SpliceAI/PrimateAI/AlphaMissense on the
+  fastVEP-selected small set (chunked), `--gtf` gencode namespace. Small-variant only.
+- **NMD** (`nmd.enabled`) — NMD-Scanner escape prediction on that set. Small-variant only.
+- **AbSplice** (`absplice.enabled`) — join of a *precomputed* AbSplice2 result onto VEP's
+  variant×gene keys (SNV-only; depends on VEP). AbSplice is **not** run here.
+- **E2G** (`e2g.enabled`) — ENCODE-rE2G hg38 enhancer → target-gene overlap. Small-variant only.
+
+> **Migration status (2026-07-15):** fastVEP is on the layout above (`variant_id`,
+> distance-keyed, SV-capable). **VEP / NMD / AbSplice / e2g are being migrated** to
+> `<tool>.parquet/variant_type=<vtype>` — until then they are gated `enabled: false` and
+> enabling one raises an error. **SV annotation is fastVEP-only** (setting `include_sv` on any
+> other tool is rejected).
+
+VEP gene namespace is pinned to the config `gtf` via **`--gtf`** (no cache), so `Gene`/`Feature`
+match the consumer (gencode v34). Trade-off: SIFT/PolyPhen/Condel + cached gnomAD AF are
+unavailable (cache-only); missense via AlphaMissense/PrimateAI/CADD. VEP's `--canonical` is
+inert in `--gtf` mode, so `CANONICAL` is reconstructed from the GTF (MANE_Select else best
+`appris_principal_N`).
 
 ## Input contract
 - `input_vcf` — bgzipped + tabix'd VCF of **unique** variants, `ID = chrom_start_ref_alt`
-  (carried through as VEP `Uploaded_variation`; the join key).
-- `sv_vcf` (optional) — SV VCF for Tier 0 only (`ID = sv_id`).
-- Reference FASTA + gencode **GFF3** (Tier 0) and **GTF** (VEP/canonical/metadata), matching
-  the consumer's gene namespace (gtex-benchmark = gencode v34).
-
-## Outputs (under `output_dir`)
-| File | Tier | Grain |
-|---|---|---|
-| `<track>/basic_annotations.parquet` | 0 | variant × transcript (keyed on `variant_id`) |
-| `transcript_metadata.parquet` | 0 | transcript (symbol/biotype/canonical/tsl) |
-| `annotations.parquet` | deep | variant × transcript (VEP + plugins [+ NMD + AbSplice]) |
-| `e2g/e2g.parquet` | E2G | variant × target_gene (in-enhancer + rE2G score + dist) |
+  (carried through as `variant_id`, the join key).
+- `sv_vcf` — **optional** SV VCF (`ID = sv_id`); annotated by fastVEP only. Omit it entirely for
+  a no-SV dataset (the pipeline just skips the `variant_type=SV` partition).
+- Reference FASTA + gencode **GFF3** (fastVEP) and **GTF** (VEP/canonical/metadata), matching the
+  consumer's gene namespace (gtex-benchmark = gencode v34).
 
 ## Configuration
-`config.yaml` is the template (copy to `config.local.yaml` and edit, or pass config via the
-`module` block — see below). Tier flags: `deep.enabled` / `nmd.enabled` / `absplice.enabled`
-/ `e2g.enabled` (Tier 0 always runs). Key blocks: `fastvep` (distance, scratch), `deep`
-(window), `vep` (incl. nested `vep.plugin_data` deep reference data), `e2g` (predictions/enhancers dirs,
-model, score_threshold, classes, cell_types).
+`config.yaml` is the template (copy to `config.local.yaml`, or pass config via the `module`
+block). Keys:
+- `distance` — the one cis window (fastVEP `--distance` + deep selection + VEP `--distance`); also
+  the output-dir prefix.
+- `fastvep: { include_sv, scratch, parse_memory_limit, parse_threads }` — always on.
+- `vep / nmd / absplice / e2g: { enabled: false, … }` — per-tool opt-in. `vep` also carries
+  `plugin_dir`/`fork`/`variants_per_chunk`/`plugin_data{…}`; `absplice` a precomputed `result`;
+  `e2g` the ENCODE-rE2G tables.
+- No per-tool `distance`; no `include_sv` outside `fastvep` (the Snakefile errors if set elsewhere).
 
 ## Usage — standalone
-Each rule declares its own conda env, so run with `--use-conda` (conda/mamba required).
-Tier 0's `envs/fastvep.yaml` builds the fastVEP Rust CLI via a cargo post-deploy (pinned).
-Deep-tier reference data (VEP plugins/LOFTEE/CADD/…) and the E2G tables are installed
-separately and pointed at in the config.
+Each rule declares its own conda env, so run with `--use-conda` (conda/mamba required). fastVEP's
+`envs/fastvep.yaml` builds the fastVEP Rust CLI via a pinned cargo post-deploy. Deep-tier reference
+data (VEP plugins/LOFTEE/CADD/…) and the E2G tables are installed separately and pointed at in config.
 
 ```bash
-# configure paths
-cp config.yaml config.local.yaml      # edit reference + input paths, flip tier flags
-
-# dry-run the DAG
-uv run snakemake --configfile config.local.yaml -n
-
-# Tier 0 only (default; just gff3+fasta) — local
-uv run snakemake --configfile config.local.yaml --use-conda --cores 8
-
-# full run (deep + E2G enabled in the config) on Slurm
-uv run snakemake --configfile config.local.yaml --use-conda --profile profiles/slurm
-
-# scoped cleanup (no rm -rf)
-uv run snakemake --configfile config.local.yaml --delete-all-output
+cp config.yaml config.local.yaml               # edit reference + input paths, flip tool flags
+uv run snakemake --configfile config.local.yaml -n                       # dry-run the DAG
+uv run snakemake --configfile config.local.yaml --use-conda --cores 8    # fastVEP only (default)
+uv run snakemake --configfile config.local.yaml --use-conda --profile profiles/slurm   # with tools enabled
+uv run snakemake --configfile config.local.yaml --delete-all-output      # scoped cleanup
 ```
 
 ## Usage — as a Snakemake `module`
-A consumer loads this pipeline as a module and drives it from its own Snakefile. **Gotcha:
-the `module` directive's `config:` REPLACES the module's config (it does not merge with the
-module's own `configfile:`)** — so the parent must assemble this pipeline's *complete* config.
-The clean pattern (as gtex-benchmark does): keep a `variant_annotation:` block in the parent
-config holding the pipeline-specific keys, then add the shared refs + seam paths:
+A consumer loads this pipeline as a module and drives it from its own Snakefile. **Gotcha: the
+`module` directive's `config:` REPLACES the module's config (it does not merge)** — so the parent
+assembles the *complete* config. The clean pattern (as gtex-benchmark does):
 
 ```python
 _VA = config["variant_annotation"]                       # block in the parent's config
 _VA_CFG = {
-    **{k: v for k, v in _VA.items() if k != "repo"},     # chromosomes, fastvep, deep, vep
-                                                          # (incl. vep.plugin_data), nmd, absplice, e2g, …
+    **{k: v for k, v in _VA.items() if k not in ("repo", "ref")},   # distance, fastvep, vep, nmd, absplice, e2g, …
     "fasta": config["fasta"], "gtf": config["gtf"], "gff3": config["gff3"],
     "input_vcf": f"{VAR}/variants.vcf.gz",
-    "sv_vcf":    f"{VAR}/sv_variants.vcf.gz",
     "output_dir": f"{OUTPUT}/variant_annotation",
 }
+if HAS_SV:                                                # sv_vcf is OPTIONAL — omit for a no-SV dataset
+    _VA_CFG["sv_vcf"] = f"{VAR}/sv_variants.vcf.gz"
 
 module variant_annotation:
-    snakefile: f"{_VA['repo']}/Snakefile"
+    snakefile: github(_VA["repo"], path="Snakefile", branch=_VA["ref"])
     config:    _VA_CFG
 
-use rule * from variant_annotation as va_*               # rules become va_fastvep, va_vep, …
+use rule * from variant_annotation as va_*               # rules become va_fastvep, va_parse_fastvep_small, …
 ```
 
-Then depend on the outputs (e.g. `…/variant_annotation/small/basic_annotations.parquet`) from
-the consumer's own rules — the cross-repo DAG wires automatically (the consumer's VCF →
-`va_fastvep` → …). Run the parent with `--use-conda` so the module's per-rule conda envs
-build. Notes: keep the same Snakemake version on both sides; the module's relative
-`include:`/`conda:` paths resolve to *this* repo; this repo's own `configfile:` is inert under
-module loading.
+Then depend on the outputs (e.g. `…/variant_annotation/distance_<d>/fastvep.parquet/variant_type=SNV`)
+from the consumer's own rules — the cross-repo DAG wires automatically. Run the parent with
+`--use-conda`. Notes: keep the same Snakemake version on both sides; the module's relative
+`include:`/`conda:` paths resolve to *this* repo; loading over `github(...)` uses the pushed
+commit, so **commit + push module changes before the consumer picks them up**.
 
 ## Reference data / envs
-VEP + plugins + their data (CADD ~300 GB, SpliceAI, PrimateAI, AlphaMissense, LOFTEE), NMD-
-Scanner (conda; use its **CSV** output — the parquet writer is buggy), AbSplice2 (precomputed
-result dir), and the ENCODE-rE2G hg38 tables are installed/downloaded separately. fastVEP is
-built reproducibly inside `envs/fastvep.yaml` (rust ≥1.88 + cargo post-deploy, pinned).
-
-> Status: deep tier (VEP+plugins+NMD+AbSplice, chunked) **run end-to-end on the full 30M-variant
-> GTEx set**. Tier 0 fastVEP + E2G added 2026-06-26 (tiered funnel; opt-in deep/E2G).
+VEP + plugins + their data (CADD ~300 GB, SpliceAI, PrimateAI, AlphaMissense, LOFTEE), NMD-Scanner
+(conda; use its **CSV** output — the parquet writer is buggy), AbSplice2 (precomputed result dir),
+and the ENCODE-rE2G hg38 tables are installed/downloaded separately. fastVEP is built reproducibly
+inside `envs/fastvep.yaml` (rust ≥1.88 + cargo post-deploy, pinned).
