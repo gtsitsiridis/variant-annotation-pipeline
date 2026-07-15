@@ -10,19 +10,25 @@ Per-track outputs land under OUT/<track>/basic_annotations.parquet so the {track
 stays clean.
 """
 
-# track -> input VCF. `small` is mandatory; `sv` only if sv_vcf is configured.
+# track -> input VCF. `small` is mandatory; `sv` only if sv_vcf is set AND fastvep.include_sv.
+_FASTVEP = config.get("fastvep", {})
+FASTVEP_DISTANCE = _FASTVEP.get("distance", 5000)
+FASTVEP_INCLUDE_SV = _FASTVEP.get("include_sv", True)
 TRACK_VCF = {"small": config["input_vcf"]}
-if config.get("sv_vcf"):
+if config.get("sv_vcf") and FASTVEP_INCLUDE_SV:
     TRACK_VCF["sv"] = config["sv_vcf"]
 TRACKS = list(TRACK_VCF)
 
-_FASTVEP = config.get("fastvep", {})
-FASTVEP_DISTANCE = _FASTVEP.get("distance", 5000)
 # Huge temporary CSQ VCFs (the small track is ~20 GB) — keep them off the network output dir.
 FASTVEP_SCRATCH = _FASTVEP.get("scratch", str(OUT / "fastvep"))
 
-# The `small` track's basic annotation is the input to the deep-tier selector.
-BASIC_SMALL = OUT / "small" / "basic_annotations.parquet"
+# Unified output: OUT/fastvep/variant_type={SNV,indel,SV}/<track>.parquet (hive-partitioned).
+# `small` -> {SNV,indel} (split by ref/alt in parse); `sv` -> {SV}. This is the base annotation
+# table every downstream tool + consumer reads (fastvep/**/*.parquet, hive_partitioning=true).
+FASTVEP_DIR = OUT / "fastvep"
+FASTVEP_PARTS = {"small": ["SNV", "indel"], "sv": ["SV"]}
+# variant_type partition dirs that exist given the configured tracks (Tier-0 targets).
+FASTVEP_TARGETS = [FASTVEP_DIR / f"variant_type={vt}" for tr in TRACKS for vt in FASTVEP_PARTS[tr]]
 
 
 wildcard_constraints:
@@ -59,17 +65,40 @@ rule fastvep:
         "  --distance {params.distance} -o {output.vcf}"
 
 
-rule parse_fastvep:
-    """Explode CSQ -> tidy transcript-level parquet keyed on variant_id (+ metadata join)."""
+rule parse_fastvep_small:
+    """Explode the small-track CSQ -> fastvep/variant_type={SNV,indel}/ (split by ref/alt)."""
     input:
-        vcf=f"{FASTVEP_SCRATCH}/{{track}}.csq.vcf",
+        vcf=f"{FASTVEP_SCRATCH}/small.csq.vcf",
         metadata=OUT / "transcript_metadata.parquet",
     output:
-        parquet=OUT / "{track}" / "basic_annotations.parquet",
+        directory(FASTVEP_DIR / "variant_type=SNV"),
+        directory(FASTVEP_DIR / "variant_type=indel"),
     params:
+        out_dir=str(FASTVEP_DIR),
+        track="small",
         memory_limit=_FASTVEP.get("parse_memory_limit", "32GB"),
         threads=_FASTVEP.get("parse_threads", 4),
     conda:
         "../../envs/parse.yaml"
     script:
         "../scripts/parse_fastvep.py"
+
+
+if "sv" in TRACKS:
+
+    rule parse_fastvep_sv:
+        """Explode the SV-track CSQ -> fastvep/variant_type=SV/."""
+        input:
+            vcf=f"{FASTVEP_SCRATCH}/sv.csq.vcf",
+            metadata=OUT / "transcript_metadata.parquet",
+        output:
+            directory(FASTVEP_DIR / "variant_type=SV"),
+        params:
+            out_dir=str(FASTVEP_DIR),
+            track="sv",
+            memory_limit=_FASTVEP.get("parse_memory_limit", "32GB"),
+            threads=_FASTVEP.get("parse_threads", 4),
+        conda:
+            "../../envs/parse.yaml"
+        script:
+            "../scripts/parse_fastvep.py"

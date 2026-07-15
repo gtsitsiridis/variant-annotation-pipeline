@@ -21,41 +21,38 @@ from pathlib import Path
 configfile: "config.yaml"
 
 OUT = Path(config["output_dir"])
-DEEP = config.get("deep", {}).get("enabled", False)
+
+# ── Per-tool flags (the retired "deep tier" umbrella is gone) ─────────────────────────
+# fastVEP is the always-on base. Every other tool has its own `enabled` + `distance` +
+# `include_sv`. Each tool writes OUT/<tool>/variant_type={SNV,indel,SV}/ keyed on variant_id.
+VEP = config.get("vep", {}).get("enabled", False)
 NMD = config.get("nmd", {}).get("enabled", False)
 ABSPLICE = config.get("absplice", {}).get("enabled", False)
 E2G = config.get("e2g", {}).get("enabled", False)
 
+# include_sv is only implementable for overlap/consequence tools (fastVEP, VEP, NMD). AbSplice
+# (SNV/indel splice lookup) and e2g (point-variant enhancer overlap) can't score SVs — reject it.
+for _t in ("absplice", "e2g"):
+    if config.get(_t, {}).get("include_sv", False):
+        raise ValueError(f"{_t}.include_sv is not supported (no SV annotation for {_t}) — set it false.")
+
 wildcard_constraints:
     chunk = r"\d+",
+    track = r"small|sv",
+    vtype = r"SNV|indel|SV",
 
-# Tier 0 — always (defines TRACKS, BASIC_SMALL).
-include: "workflow/rules/fastvep.smk"
+include: "workflow/rules/fastvep.smk"        # Tier 0 base — always; defines FASTVEP_TARGETS
 
-# Deep VEP/NMD/AbSplice tier — opt-in. select.smk defines ANALYSIS_SET (chunk_vcf reads it);
-# merge spines on the chunked vep.parquet + canonical, folding in nmd/absplice when enabled.
-if DEEP:
-    include: "workflow/rules/select.smk"
-    include: "workflow/rules/vep.smk"
-    if NMD:
-        include: "workflow/rules/nmd.smk"
-    if ABSPLICE:
-        include: "workflow/rules/absplice.smk"
-    include: "workflow/rules/merge.smk"
-
-if E2G:
-    include: "workflow/rules/e2g.smk"
-
-
-def _targets():
-    t = [OUT / track / "basic_annotations.parquet" for track in TRACKS]   # Tier 0 always
-    if DEEP:
-        t.append(OUT / "annotations.parquet")           # deep merged (vep[+nmd+absplice])
-    if E2G:
-        t.append(OUT / "e2g" / "e2g.parquet")           # standalone (joined on variant_id)
-    return [str(x) for x in t]
+# NOTE: vep / nmd / absplice / e2g are being migrated to the per-tool <tool>/variant_type=<vtype>
+# layout (carrying variant_id, own distance, include_sv). Until that lands, only fastVEP builds;
+# enabling one of them fails loudly rather than running the old deep-tier machinery.
+_PENDING = [t for t, on in (("vep", VEP), ("nmd", NMD), ("absplice", ABSPLICE), ("e2g", E2G)) if on]
+if _PENDING:
+    raise ValueError(
+        "tools not yet migrated to the per-tool <tool>/variant_type layout: "
+        + ", ".join(_PENDING) + ". Only fastVEP is available in this build.")
 
 
 rule all:
     input:
-        _targets(),
+        [str(p) for p in FASTVEP_TARGETS],
