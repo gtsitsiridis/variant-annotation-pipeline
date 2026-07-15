@@ -40,11 +40,10 @@ output by distance lets different-window runs coexist.
   variant×gene keys (SNV-only; depends on VEP). AbSplice is **not** run here.
 - **E2G** (`e2g.enabled`) — ENCODE-rE2G hg38 enhancer → target-gene overlap. Small-variant only.
 
-> **Migration status (2026-07-15):** fastVEP is on the layout above (`variant_id`,
-> distance-keyed, SV-capable). **VEP / NMD / AbSplice / e2g are being migrated** to
-> `<tool>.parquet/variant_type=<vtype>` — until then they are gated `enabled: false` and
-> enabling one raises an error. **SV annotation is fastVEP-only** (setting `include_sv` on any
-> other tool is rejected).
+> **Migration status (2026-07-16):** fastVEP, **VEP** and **e2g** are on the layout above
+> (`variant_id`, distance-keyed). **NMD / AbSplice are pending** — gated (enabling one raises an
+> error) until migrated. **SV annotation is fastVEP-only** (setting `include_sv` on any other tool
+> is rejected).
 
 VEP gene namespace is pinned to the config `gtf` via **`--gtf`** (no cache), so `Gene`/`Feature`
 match the consumer (gencode v34). Trade-off: SIFT/PolyPhen/Condel + cached gnomAD AF are
