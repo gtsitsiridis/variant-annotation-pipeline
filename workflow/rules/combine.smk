@@ -15,6 +15,8 @@ def _combine_inputs(wc):
     d = {"fastvep": str(FASTVEP_PART)}
     if VEP:
         d["vep"] = str(PARTS / "vep.parquet")
+    if NMD:
+        d["nmd"] = str(PARTS / "nmd.parquet")
     if E2G:
         d["e2g"] = str(PARTS / "e2g.parquet")
     if ABSPLICE:

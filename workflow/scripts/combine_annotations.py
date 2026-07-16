@@ -26,6 +26,7 @@ import duckdb
 # tool columns that are join keys or duplicate the fastVEP base -> not carried into the combined table
 _VEP_DROP = {"variant_id", "chrom", "start", "ref", "alt", "Feature", "variant_type",
              "Gene", "BIOTYPE", "CANONICAL", "IMPACT", "SYMBOL", "Consequence"}
+_NMD_DROP = {"variant_id", "transcript"}
 _E2G_DROP = {"variant_id", "target_gene_id"}
 _E2G_PREFIX = "e2g_"
 _ABSPLICE_DROP = {"variant_id", "gene"}
@@ -36,7 +37,7 @@ def _cols(con, path):
         f"DESCRIBE SELECT * FROM read_parquet('{path}')").fetchall()]
 
 
-def main(fastvep: str, out_dir: str, vep=None, e2g=None, absplice=None, *,
+def main(fastvep: str, out_dir: str, vep=None, nmd=None, e2g=None, absplice=None, *,
          protein_coding_only=False, canonical_only=False,
          memory_limit="64GB", threads=6) -> None:
     t0 = time.time()
@@ -57,6 +58,11 @@ def main(fastvep: str, out_dir: str, vep=None, e2g=None, absplice=None, *,
         selects += [f'vep."{c}"' for c in extra]
         joins.append(f"LEFT JOIN read_parquet('{vep}') vep "
                      f'ON b.variant_id = vep.variant_id AND b.transcript = vep."Feature"')
+    if nmd:
+        extra = [c for c in _cols(con, nmd) if c not in _NMD_DROP]
+        selects += [f'nmd."{c}"' for c in extra]
+        joins.append(f"LEFT JOIN read_parquet('{nmd}') nmd "
+                     f"ON b.variant_id = nmd.variant_id AND b.transcript = nmd.transcript")
     if e2g:
         extra = [c for c in _cols(con, e2g) if c not in _E2G_DROP]
         selects += [f'e2g."{c}" AS "{_E2G_PREFIX}{c}"' for c in extra]
@@ -86,7 +92,7 @@ def main(fastvep: str, out_dir: str, vep=None, e2g=None, absplice=None, *,
     n = con.execute(
         f"SELECT count(*) FROM read_parquet('{out_dir}/**/*.parquet', hive_partitioning=true)"
     ).fetchone()[0]
-    tools = [t for t, p in (("vep", vep), ("e2g", e2g), ("absplice", absplice)) if p]
+    tools = [t for t, p in (("vep", vep), ("nmd", nmd), ("e2g", e2g), ("absplice", absplice)) if p]
     print(f"wrote {out_dir} ({n:,} rows; joined {tools or 'none'}; "
           f"protein_coding_only={protein_coding_only} canonical_only={canonical_only}) "
           f"in {time.time() - t0:.1f}s")
@@ -96,8 +102,8 @@ if __name__ == "__main__":
     smk = snakemake  # noqa: F821
     inp, p = smk.input, smk.params
     main(inp.fastvep, p.out_dir,
-         vep=getattr(inp, "vep", None), e2g=getattr(inp, "e2g", None),
-         absplice=getattr(inp, "absplice", None),
+         vep=getattr(inp, "vep", None), nmd=getattr(inp, "nmd", None),
+         e2g=getattr(inp, "e2g", None), absplice=getattr(inp, "absplice", None),
          protein_coding_only=bool(p.protein_coding_only),
          canonical_only=bool(p.canonical_only),
          memory_limit=p.memory_limit, threads=int(p.threads))

@@ -30,6 +30,9 @@ OUT/ transcript_metadata.parquet          # gencode GTF -> gene_type/canonical/b
   (`--gtf`, `--distance {additional.vep.distance}`) + plugins (LOFTEE/CADD/SpliceAI/PrimateAI/AlphaMissense);
   `parse_vep.py` (variant_id + `Feature`=transcript + plugin/LoF/SpliceAI/Consequence cols) → concat →
   `parts/vep.parquet`.
+- **`nmd.smk`** (`additional.nmd.enabled`): `nmd-scanner` on `fastvep/small.vcf.gz` → CSV; `parse_nmd`
+  rebuilds `variant_id` (chrom_start_ref_alt) + transcript + the escape flags → `parts/nmd.parquet`
+  (transcript-level). Single job on the filtered subset (chunk like VEP if it straggles).
 - **`e2g.smk`** (`additional.e2g.enabled`): `annotate_enhancers.py` overlaps `fastvep/small.vcf.gz` with
   ENCODE-rE2G enhancers, optional `distance_to_tss` cap → `parts/e2g.parquet` (variant×target_gene, gene-level).
 - **`absplice.smk`** (`additional.absplice.enabled`): `run_absplice.py` joins the precomputed AbSplice2
@@ -39,11 +42,10 @@ OUT/ transcript_metadata.parquet          # gencode GTF -> gene_type/canonical/b
   LEFT JOIN vep on (variant_id, transcript) + e2g/absplice on (variant_id, gene) → `annotations.parquet`
   PARTITION_BY (variant_type, gene_type, canonical). SV rows: additional cols null (SVs are fastVEP-only).
 
-`Snakefile`: `include fastvep.smk` always; `if additional.<tool>.enabled: include vep/e2g/absplice`;
+`Snakefile`: `include fastvep.smk` always; `if additional.<tool>.enabled: include vep/nmd/e2g/absplice`;
 `include combine.smk` always. `rule all` = the `annotations.parquet/variant_type=…` dirs. `include_sv`
-rejected on any additional tool; **NMD** is out of scope (enabling `additional.nmd` errors — not yet
-migrated to the funnel). Retired: `select.smk`, `merge.smk`/`merge_annotations.py`, `build_canonical.py`,
-the `distance_<d>/<tool>.parquet` per-tool layout.
+rejected on any additional tool. Retired: `select.smk`, `merge.smk`/`merge_annotations.py`,
+`build_canonical.py`, the `distance_<d>/<tool>.parquet` per-tool layout.
 
 ## Gotchas (learned the hard way)
 - **`script:` files must NOT have a line-1 `from __future__ import annotations`** — Snakemake
@@ -83,5 +85,6 @@ the `distance_<d>/<tool>.parquet` per-tool layout.
   filtered VCF → vep/e2g/absplice → combine (PARTITION_BY variant_type/gene_type/canonical).
 - Dry-runs pass: fastvep-only (5 jobs) and all-tools (11 jobs). `combine_annotations.py` +
   `parse_fastvep.py` synthetic-tested (joins, SV-null additional cols, hive round-trip, filters).
-- NOT yet run on the cluster with the real conda tools (VEP/AbSplice reference data). NMD deferred
-  (still on the old machinery; enabling `additional.nmd` errors).
+- All four additional tools (vep/nmd/e2g/absplice) migrated to the funnel (transcript-level vep/nmd →
+  join on (variant_id, transcript); gene-level e2g/absplice → join on (variant_id, gene)).
+- NOT yet run on the cluster with the real conda tools (VEP/NMD/AbSplice reference data + envs).

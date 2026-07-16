@@ -66,6 +66,11 @@ additional:                  # tools that RE-ANNOTATE fastvep/small.vcf.gz (smal
       loftee_conservation:    /path/to/loftee_data/loftee.sql
       loftee_gerp:            /path/to/loftee_data/gerp_conservation_scores.homo_sapiens.GRCh38.bw
 
+  # ── NMD-Scanner escape prediction for PTCs (transcript-level; joined on transcript) ──
+  nmd:
+    enabled: false                # set true to run (needs the nmd-scanner conda env)
+    reassign_exons: false         # set true for hg19 exon numbering
+
   # ── ENCODE-rE2G enhancer -> target gene (gene-level; joined on gene_id) ──────────────
   # Overlaps the filtered variants with ENCODE-rE2G enhancers -> target gene + rE2G score,
   # from the on-disk star-schema export (predictions dir + enhancers.parquet; no liftOver).

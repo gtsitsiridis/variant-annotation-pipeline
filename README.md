@@ -31,6 +31,8 @@ output_dir/
 - **VEP + plugins** (`additional.vep.enabled`) — LOFTEE/CADD/SpliceAI/PrimateAI/AlphaMissense on the
   filtered VCF (chunked), `--gtf` gencode namespace, own `additional.vep.distance`. Transcript-level →
   joined on (variant_id, transcript).
+- **NMD** (`additional.nmd.enabled`) — NMD-Scanner PTC escape prediction (`nmd_escape` + the 5 escape
+  rules) on the filtered VCF. Transcript-level → joined on (variant_id, transcript).
 - **E2G** (`additional.e2g.enabled`) — ENCODE-rE2G enhancer → target-gene overlap, optional
   `distance_to_tss` cap. Gene-level → joined on (variant_id, gene).
 - **AbSplice** (`additional.absplice.enabled`) — join a *precomputed* AbSplice2 result onto the filtered
@@ -59,9 +61,9 @@ come from `transcript_metadata` (joined in the base).
 `config.yaml` is the template (copy to `config.local.yaml`, or pass config via the `module` block):
 - `fastvep: { distance, protein_coding_only, canonical_only, include_sv, scratch, parse_memory_limit,
   parse_threads }` — the always-on driver + its filters.
-- `additional: { vep, e2g, absplice }` — each `{ enabled: false, … }`. `vep` carries `distance` (its own
-  `--distance`) + `plugin_dir`/`fork`/`variants_per_chunk`/`plugin_data{…}`; `e2g` the ENCODE-rE2G tables
-  + `distance_to_tss`; `absplice` a precomputed `result`.
+- `additional: { vep, nmd, e2g, absplice }` — each `{ enabled: false, … }`. `vep` carries `distance` (its
+  own `--distance`) + `plugin_dir`/`fork`/`variants_per_chunk`/`plugin_data{…}`; `nmd` a `reassign_exons`
+  flag; `e2g` the ENCODE-rE2G tables + `distance_to_tss`; `absplice` a precomputed `result`.
 - No `include_sv` outside `fastvep` (the Snakefile errors if set on an additional tool).
 
 ## Usage — standalone

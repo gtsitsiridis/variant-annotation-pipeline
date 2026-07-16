@@ -36,6 +36,9 @@ additional:
       loftee_human_ancestor: /path/to/loftee_data/human_ancestor.fa.gz
       loftee_conservation: /path/to/loftee_data/loftee.sql
       loftee_gerp: /path/to/loftee_data/gerp_conservation_scores.homo_sapiens.GRCh38.bw
+  nmd:
+    enabled: false
+    reassign_exons: false
   e2g:
     enabled: false
     distance_to_tss: null
