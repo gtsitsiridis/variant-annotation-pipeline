@@ -6,69 +6,63 @@ gtex-benchmark `variants` module) and annotates it. Independent of any dataset: 
 *variants*, not GTEx, and is consumed across a repo boundary (e.g. by gtex-benchmark's
 `evaluation` module) either **standalone** or **as a Snakemake `module`**.
 
-## Per-tool annotation
+## Annotation model — fastVEP funnel → one `annotations.parquet`
 
-fastVEP is the always-on base; every other tool is an independent opt-in flag (the old
-"deep tier" umbrella is gone). A **single `distance`** (the cis window) drives fastVEP's
-`--distance`, the deep-tool variant *selection* (via fastVEP's `distance` annotation column),
-and VEP's `--distance`. Output is uniform and **distance-keyed**:
+fastVEP is the always-on **driver**. It annotates the whole set (the **base** table), then applies the
+pipeline filters (`distance` + `protein_coding_only` + `canonical_only`) to emit a **filtered VCF**
+that every enabled `additional` tool re-annotates — so the heavy tools run only on the near-gene /
+coding / canonical subset. All per-method outputs are LEFT-joined into ONE `annotations.parquet`,
+hive-partitioned by `variant_type` / `gene_type` / `canonical`:
 
 ```
 output_dir/
-  distance_<distance>/
-    fastvep.parquet/variant_type={SNV,indel,SV}/     (ALWAYS — the base annotation)
-    vep.parquet/variant_type={SNV,indel}/            (vep.enabled)
-    nmd.parquet/variant_type={SNV,indel}/            (nmd.enabled)
-    absplice.parquet/variant_type={SNV,indel}/       (absplice.enabled — VEP-dependent, SNV-only)
-    e2g.parquet/variant_type={SNV,indel}/            (e2g.enabled)
-  transcript_metadata.parquet                        (distance-independent, shared)
+  transcript_metadata.parquet                     # gencode GTF -> gene_type/canonical/biotype/… (shared)
+  fastvep/
+    small.csq.vcf.gz  sv.csq.vcf.gz                # raw fastVEP CSQ (temp; the parse reads them)
+    small.vcf.gz (+.tbi)                           # THE fastVEP output VCF: filtered small subset
+  parts/  fastvep.parquet vep.parquet e2g.parquet absplice.parquet   # temp per-method
+  annotations.parquet/variant_type=<vt>/gene_type=<gt>/canonical=<bool>/   # FINAL (hive)
 ```
 
-Every per-tool parquet is hive-partitioned by `variant_type` and keyed on **`variant_id`**
-(`chrom_start_ref_alt` for small variants, `sv_id` for SVs) — the single join key. Keying the
-output by distance lets different-window runs coexist.
+- **fastVEP** (always on; only gencode **GFF3 + FASTA**) — per-transcript consequence/distance over the
+  whole set, the base table, AND the funnel: the filtered `fastvep/small.vcf.gz`. The **only SV-capable
+  tool** (`fastvep.include_sv`; `sv_vcf` optional). SVs go into the base/annotations but never to the
+  additional tools.
+- **VEP + plugins** (`additional.vep.enabled`) — LOFTEE/CADD/SpliceAI/PrimateAI/AlphaMissense on the
+  filtered VCF (chunked), `--gtf` gencode namespace, own `additional.vep.distance`. Transcript-level →
+  joined on (variant_id, transcript).
+- **E2G** (`additional.e2g.enabled`) — ENCODE-rE2G enhancer → target-gene overlap, optional
+  `distance_to_tss` cap. Gene-level → joined on (variant_id, gene).
+- **AbSplice** (`additional.absplice.enabled`) — join a *precomputed* AbSplice2 result onto the filtered
+  VCF (SNV-only). Gene-level → joined on (variant_id, gene). AbSplice is **not** run here.
 
-- **fastVEP** (always on; only needs gencode **GFF3 + FASTA**) — broad per-transcript
-  consequence/distance over the whole set. The **only SV-capable tool** (`fastvep.include_sv`;
-  `sv_vcf` is optional). `small` → `variant_type={SNV,indel}` (split by ref/alt); `sv` →
-  `variant_type=SV`. It is both the base annotation and the source of the `distance` used to
-  select each deep tool's variant set.
-- **VEP + plugins** (`vep.enabled`) — LOFTEE/CADD/SpliceAI/PrimateAI/AlphaMissense on the
-  fastVEP-selected small set (chunked), `--gtf` gencode namespace. Small-variant only.
-- **NMD** (`nmd.enabled`) — NMD-Scanner escape prediction on that set. Small-variant only.
-- **AbSplice** (`absplice.enabled`) — join of a *precomputed* AbSplice2 result onto VEP's
-  variant×gene keys (SNV-only; depends on VEP). AbSplice is **not** run here.
-- **E2G** (`e2g.enabled`) — ENCODE-rE2G hg38 enhancer → target-gene overlap. Small-variant only.
+**Filters + partitioning:** `protein_coding_only` / `canonical_only` are optional — when on they drop
+non-matching transcript rows (so those partitions don't appear); either way the output is partitioned by
+`variant_type` / `gene_type` / `canonical`. **SV rows** carry the additional-tool columns as **null**
+(SVs are fastVEP-only). **NMD** is not yet migrated to this funnel (enabling `additional.nmd` errors).
+Dropping the `distance_<d>/` prefix means one annotation set per output dir — widen `distance` for a
+larger cis / distal reach rather than keeping multiple.
 
-> **Migration status (2026-07-16):** fastVEP, **VEP** and **e2g** are on the layout above
-> (`variant_id`, distance-keyed). **NMD / AbSplice are pending** — gated (enabling one raises an
-> error) until migrated. **SV annotation is fastVEP-only** (setting `include_sv` on any other tool
-> is rejected).
-
-VEP gene namespace is pinned to the config `gtf` via **`--gtf`** (no cache), so `Gene`/`Feature`
-match the consumer (gencode v34). Trade-off: SIFT/PolyPhen/Condel + cached gnomAD AF are
-unavailable (cache-only); missense via AlphaMissense/PrimateAI/CADD. VEP's `--canonical` is
-inert in `--gtf` mode, so `CANONICAL` is reconstructed from the GTF (MANE_Select else best
-`appris_principal_N`).
+VEP gene namespace is pinned to the config `gtf` via **`--gtf`** (no cache): SIFT/PolyPhen/Condel +
+cached gnomAD AF are unavailable (missense via AlphaMissense/PrimateAI/CADD), and `--canonical`/gene_type
+come from `transcript_metadata` (joined in the base).
 
 ## Input contract
 - `input_vcf` — bgzipped + tabix'd VCF of **unique** variants, `ID = chrom_start_ref_alt`
   (carried through as `variant_id`, the join key).
-- `sv_vcf` — **optional** SV VCF (`ID = sv_id`); annotated by fastVEP only. Omit it entirely for
-  a no-SV dataset (the pipeline just skips the `variant_type=SV` partition).
-- Reference FASTA + gencode **GFF3** (fastVEP) and **GTF** (VEP/canonical/metadata), matching the
-  consumer's gene namespace (gtex-benchmark = gencode v34).
+- `sv_vcf` — **optional** SV VCF (`ID = sv_id`); annotated by fastVEP only. Omit it entirely for a
+  no-SV dataset (no `variant_type=SV` partition).
+- Reference FASTA + gencode **GFF3** (fastVEP) and **GTF** (VEP + metadata), matching the consumer's
+  gene namespace (gtex-benchmark = gencode v34).
 
 ## Configuration
-`config.yaml` is the template (copy to `config.local.yaml`, or pass config via the `module`
-block). Keys:
-- `distance` — the one cis window (fastVEP `--distance` + deep selection + VEP `--distance`); also
-  the output-dir prefix.
-- `fastvep: { include_sv, scratch, parse_memory_limit, parse_threads }` — always on.
-- `vep / nmd / absplice / e2g: { enabled: false, … }` — per-tool opt-in. `vep` also carries
-  `plugin_dir`/`fork`/`variants_per_chunk`/`plugin_data{…}`; `absplice` a precomputed `result`;
-  `e2g` the ENCODE-rE2G tables.
-- No per-tool `distance`; no `include_sv` outside `fastvep` (the Snakefile errors if set elsewhere).
+`config.yaml` is the template (copy to `config.local.yaml`, or pass config via the `module` block):
+- `fastvep: { distance, protein_coding_only, canonical_only, include_sv, scratch, parse_memory_limit,
+  parse_threads }` — the always-on driver + its filters.
+- `additional: { vep, e2g, absplice }` — each `{ enabled: false, … }`. `vep` carries `distance` (its own
+  `--distance`) + `plugin_dir`/`fork`/`variants_per_chunk`/`plugin_data{…}`; `e2g` the ENCODE-rE2G tables
+  + `distance_to_tss`; `absplice` a precomputed `result`.
+- No `include_sv` outside `fastvep` (the Snakefile errors if set on an additional tool).
 
 ## Usage — standalone
 Each rule declares its own conda env, so run with `--use-conda` (conda/mamba required). fastVEP's
@@ -91,7 +85,7 @@ assembles the *complete* config. The clean pattern (as gtex-benchmark does):
 ```python
 _VA = config["variant_annotation"]                       # block in the parent's config
 _VA_CFG = {
-    **{k: v for k, v in _VA.items() if k not in ("repo", "ref")},   # distance, fastvep, vep, nmd, absplice, e2g, …
+    **{k: v for k, v in _VA.items() if k not in ("repo", "ref")},   # fastvep, additional, …
     "fasta": config["fasta"], "gtf": config["gtf"], "gff3": config["gff3"],
     "input_vcf": f"{VAR}/variants.vcf.gz",
     "output_dir": f"{OUTPUT}/variant_annotation",
@@ -103,10 +97,10 @@ module variant_annotation:
     snakefile: github(_VA["repo"], path="Snakefile", branch=_VA["ref"])
     config:    _VA_CFG
 
-use rule * from variant_annotation as va_*               # rules become va_fastvep, va_parse_fastvep_small, …
+use rule * from variant_annotation as va_*               # rules become va_fastvep, va_parse_fastvep, va_combine, …
 ```
 
-Then depend on the outputs (e.g. `…/variant_annotation/distance_<d>/fastvep.parquet/variant_type=SNV`)
+Then depend on the outputs (e.g. `…/variant_annotation/annotations.parquet/variant_type=SNV`)
 from the consumer's own rules — the cross-repo DAG wires automatically. Run the parent with
 `--use-conda`. Notes: keep the same Snakemake version on both sides; the module's relative
 `include:`/`conda:` paths resolve to *this* repo; loading over `github(...)` uses the pushed

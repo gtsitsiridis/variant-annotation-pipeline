@@ -1,28 +1,27 @@
 """Ensembl VEP + plugins, scattered over fixed-size variant chunks.
 
-Gene namespace is pinned to the config `gtf` (gencode v34) via VEP `--gtf` custom
-annotation — NOT a prebuilt cache, whose Ensembl release wouldn't match gencode v34. This
-keeps `Gene`/`Feature` in the same namespace as the consumer (gtex-benchmark). VEP `--gtf`
-needs a sorted, bgzipped, tabixed GTF, produced by `prepare_gtf`.
+Runs on fastVEP's filtered output VCF (`fastvep/small.vcf.gz`) — the near-gene / coding /
+canonical subset — so the heavy plugins only score where they can. Gene namespace is pinned to
+the config `gtf` (gencode v34) via VEP `--gtf` custom annotation (not a prebuilt cache), keeping
+`Gene`/`Feature` in the consumer's namespace. VEP `--gtf` needs a sorted/bgzipped/tabixed GTF
+(`prepare_gtf`).
 
-Scatter: the input VCF is split into fixed-size chunks of `vep.variants_per_chunk` variants
-(checkpoint `chunk_vcf`), one VEP job per chunk. Fixed-size chunks give even parallelism
-with no big-chromosome straggler and bounded per-job memory/runtime (deeprvat-style),
-unlike a per-chromosome scatter where chr1 (~6× chr21) dominates wall-clock.
-
-Output is per-transcript (one row per variant × overlapping transcript): we deliberately do
-NOT pass --pick / --per_gene / --most_severe, so every transcript consequence is kept (the
-downstream consumer picks). `--canonical` only *adds* a CANONICAL flag column; it does not
-restrict to canonical transcripts.
+Scatter: the filtered VCF is split into fixed-size chunks of `additional.vep.variants_per_chunk`
+variants (checkpoint `chunk_vcf`), one VEP job per chunk (deeprvat-style — no big-chromosome
+straggler). Output is per-transcript (no --pick / --per_gene / --most_severe); every transcript
+consequence is kept. The per-chunk parquets are concatenated into `parts/vep.parquet`, which
+combine joins onto the fastVEP base on (variant_id, transcript).
 """
 import os
 import sys
 
-VEP_PD = config["vep"]["plugin_data"]
+VEP_CFG = config["additional"]["vep"]
+VEP_PD = VEP_CFG["plugin_data"]
+VEP_DISTANCE = VEP_CFG.get("distance", FASTVEP_DISTANCE)   # VEP's own --distance (native)
 REF = OUT / "ref"
 CHUNKS = OUT / "vcf"                     # chunk_vcf writes chunk_NNNNN.vcf.gz here
-CHUNK_SIZE = int(config["vep"].get("variants_per_chunk", 500_000))
-# Optional chromosome filter applied before chunking ([] / unset = the whole input VCF).
+CHUNK_SIZE = int(VEP_CFG.get("variants_per_chunk", 500_000))
+# Optional chromosome filter applied before chunking ([] / unset = the whole filtered VCF).
 _REGION = ("-r " + ",".join(config["chromosomes"])) if config.get("chromosomes") else ""
 
 
@@ -40,11 +39,10 @@ def _have(*paths) -> bool:
 def _plugin_args() -> str:
     """Assemble the --plugin flags, including only plugins whose data files are present.
 
-    These plugins read their own data files (not the VEP cache), so they work in --gtf
-    mode. A plugin whose configured path is a placeholder / missing (e.g. PrimateAI when no
-    data is staged) is skipped rather than failing the VEP run. SIFT/PolyPhen — and thus
-    Condel — are cache-only and unavailable here; missense is covered by AlphaMissense +
-    PrimateAI + CADD.
+    These plugins read their own data files (not the VEP cache), so they work in --gtf mode. A
+    plugin whose configured path is a placeholder / missing is skipped rather than failing the
+    run. SIFT/PolyPhen — and thus Condel — are cache-only and unavailable here; missense is
+    covered by AlphaMissense + PrimateAI + CADD.
     """
     pd = VEP_PD
     specs = []
@@ -57,7 +55,6 @@ def _plugin_args() -> str:
     if _have(pd["alphamissense"]):
         specs.append(f"--plugin AlphaMissense,file={pd['alphamissense']}")
     if _have(pd["loftee_human_ancestor"], pd["loftee_conservation"], pd["loftee_gerp"]):
-        # LOFTEE (loftee src dir must be on --dir_plugins or PERL5LIB)
         specs.append(
             f"--plugin LoF,loftee_path:{pd['loftee_path']},"
             f"human_ancestor_fa:{pd['loftee_human_ancestor']},"
@@ -89,15 +86,10 @@ rule prepare_gtf:
 
 
 checkpoint chunk_vcf:
-    """Split the deep-tier ANALYSIS_SET into fixed-size bgzipped chunks of
-    `vep.variants_per_chunk` variants each. Each chunk is a contiguous, position-sorted slice
-    (header re-attached), tabix-indexed for VEP.
-
-    Input is ANALYSIS_SET (the small track narrowed to config `deep.window` by select.smk) —
-    NOT the full input_vcf — so the heavy plugins only run where they can score. nmd.smk reads
-    the same chunks, so it inherits the analysis set too."""
+    """Split the fastVEP-filtered VCF into fixed-size bgzipped chunks of
+    `additional.vep.variants_per_chunk` variants each (header re-attached, tabix-indexed)."""
     input:
-        vcf=ANALYSIS_SET,
+        vcf=FASTVEP_FILTERED_VCF,
     output:
         chunkdir=directory(CHUNKS),
     params:
@@ -132,21 +124,18 @@ rule vep:
     output:
         tab=OUT / "vep" / "chunk_{chunk}.vep.tsv.gz",
     params:
-        plugin_dir=config["vep"]["plugin_dir"],
+        plugin_dir=VEP_CFG["plugin_dir"],
         assembly=config["assembly"],
-        fork=config["vep"]["fork"],
+        fork=VEP_CFG["fork"],
         plugins=PLUGIN_ARGS,
         loftee_path=VEP_PD["loftee_path"],
-        distance=config["distance"],       # the single pipeline cis window (was hardcoded 5000)
+        distance=VEP_DISTANCE,
     conda:
         "../../envs/vep.yaml"
     shell:
-        # PERL5LIB must include LOFTEE for its modules to load. Use ${{PERL5LIB:-}} (default
-        # empty) because Snakemake wraps the recipe in `set -u`, which aborts on an unset
-        # PERL5LIB (e.g. on a clean Slurm compute node).
-        # NB: NO --offline (it forces a cache, incompatible with --gtf custom annotation).
-        # SIFT/PolyPhen and cached gnomAD AF are cache-only → unavailable in --gtf mode;
-        # missense via AlphaMissense/PrimateAI/CADD, allele freq from the source variant set.
+        # PERL5LIB must include LOFTEE for its modules to load; ${{PERL5LIB:-}} guards `set -u`.
+        # NB: NO --offline (forces a cache, incompatible with --gtf). SIFT/PolyPhen + cached
+        # gnomAD AF are cache-only → unavailable in --gtf mode.
         "PERL5LIB={params.loftee_path}:${{PERL5LIB:-}} "
         "vep --gtf {input.gtf} --fasta {input.fasta} "
         "    --dir_plugins {params.plugin_dir} --assembly {params.assembly} "
@@ -157,7 +146,7 @@ rule vep:
 
 
 rule parse_vep:
-    """VEP tab → tidy per-chunk parquet (variant×transcript), carrying variant_id + variant_type."""
+    """VEP tab → tidy per-chunk parquet (variant×transcript), carrying variant_id + transcript."""
     input:
         tab=OUT / "vep" / "chunk_{chunk}.vep.tsv.gz",
     output:
@@ -168,28 +157,18 @@ rule parse_vep:
         "../scripts/parse_vep.py"
 
 
-# final VEP table: concat the per-chunk parquets and write hive-partitioned by variant_type
-# (small-only; SNV/indel). Keyed on variant_id — the consumer joins transcript_metadata for
-# canonical/biotype if needed (the old canonical-merge / annotations.parquet is retired).
-VEP_DIR = OUT / f"distance_{config['distance']}" / "vep.parquet"
-
-
 def _vep_chunk_parquets(wildcards):
     return expand(str(OUT / "vep" / "chunk_{chunk}.vep.parquet"), chunk=chunk_ids())
 
 
 rule vep_parquet:
+    """Concat the per-chunk VEP parquets -> parts/vep.parquet (flat; combine joins on variant_id+transcript)."""
     input:
         parquets=_vep_chunk_parquets,
     output:
-        [directory(VEP_DIR / f"variant_type={vt}") for vt in ("SNV", "indel")],
-    params:
-        out_dir=str(VEP_DIR),
+        parquet=PARTS / "vep.parquet",
     run:
         import polars as pl
-        from pathlib import Path
-        df = pl.concat([pl.scan_parquet(p) for p in input.parquets]).collect(engine="streaming")
-        for vt in ("SNV", "indel"):
-            d = Path(params.out_dir) / f"variant_type={vt}"
-            d.mkdir(parents=True, exist_ok=True)
-            df.filter(pl.col("variant_type") == vt).drop("variant_type").write_parquet(d / "data.parquet")
+        (pl.concat([pl.scan_parquet(p) for p in input.parquets])
+           .collect(engine="streaming")
+           .write_parquet(output.parquet))

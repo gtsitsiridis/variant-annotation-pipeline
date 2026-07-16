@@ -1,19 +1,39 @@
-"""AbSplice (tissue-specific splicing), gagneurlab/absplice.
+"""AbSplice2 — precomputed per-(variant, gene) splice scores (lookup, no compute).
 
-AbSplice ships its own (heavy) snakemake workflow needing per-tissue SpliceMaps + SpliceAI
-(+ GPU); we do NOT run it. Instead `config['absplice']['result']` points at a *precomputed*
-AbSplice2 result — deeprvat's per-gene `*_max_preds.parquet` directory — and this rule
-inner-joins the `AbSplice_DNA_max` / `AbSplice2_max` scores onto our variant set (SNV-only:
-indels get no score). Only built when `absplice.enabled: true`.
+Joins the precomputed AbSplice2 result (`additional.absplice.result`) onto fastVEP's filtered VCF
+-> parts/absplice.parquet (variant_id, gene, AbSplice_DNA_max, AbSplice2_max). Gene-level, SNV-only;
+combine joins it onto the fastVEP base on (variant_id, gene). Opt-in via `additional.absplice.enabled`.
 """
+
+_ABSPLICE = config["additional"]["absplice"]
+
+
+def _gb(x, default=16):
+    """'16GB' / '16' -> 16 (int GiB); anything unparseable -> default."""
+    try:
+        return int(float(str(x).upper().replace("GB", "").strip()))
+    except (TypeError, ValueError):
+        return default
+
+
+_ABSPLICE_MEM_GB = _gb(_ABSPLICE.get("memory_limit", "16GB"))
+_ABSPLICE_THREADS = int(_ABSPLICE.get("threads", 4))
 
 
 rule absplice:
     input:
-        absplice_dir=config["absplice"]["result"],
-        vep=OUT / "vep.parquet",
+        vcf=FASTVEP_FILTERED_VCF,
     output:
-        parquet=OUT / "absplice" / "absplice.parquet",
+        parquet=PARTS / "absplice.parquet",
+    params:
+        result=_ABSPLICE["result"],       # precomputed AbSplice2 per-gene *_max_preds.parquet dir
+        gtf=config["gtf"],                 # gencode: unversioned -> versioned gene_id map
+        memory_limit=_ABSPLICE.get("memory_limit", "16GB"),
+        threads=_ABSPLICE_THREADS,
+    threads: _ABSPLICE_THREADS
+    resources:
+        mem_mb=_ABSPLICE_MEM_GB * 1024 + 8192,
+        runtime=_ABSPLICE.get("runtime", 240),
     conda:
         "../../envs/parse.yaml"
     script:

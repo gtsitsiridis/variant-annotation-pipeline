@@ -5,94 +5,86 @@
 # bgzipped + tabix-indexed, ID = chrom_start_ref_alt (carried as VEP Uploaded_variation).
 # e.g. the gtex-benchmark variants module: output/variants/variants.vcf.gz
 input_vcf: /data/nasif12/home_if12/tsi/projects/gtex-benchmark/output/variants/variants.vcf.gz
-# Optional SV track (Tier 0 fastVEP only — ID=sv_id; fastVEP is ID-agnostic). Omit to skip.
+# Optional SV track (fastVEP only — ID=sv_id; fastVEP is ID-agnostic). Omit to skip.
 sv_vcf:    /data/nasif12/home_if12/tsi/projects/gtex-benchmark/output/variants/sv_variants.vcf.gz
 
-# Centralized output, namespaced per the consuming project's convention. Per-tool
-# subdirs are created under here: vcf/ vep/ nmd/ absplice/ ref/ logs/ + annotations.parquet.
+# Centralized output. The pipeline writes: transcript_metadata.parquet, fastvep/ (temp CSQ
+# VCFs + the persisted filtered small.vcf.gz), parts/ (temp per-method parquets), and the
+# final annotations.parquet (hive-partitioned by variant_type/gene_type/canonical).
 output_dir: /data/nasif12/home_if12/tsi/projects/gtex-benchmark/output/variant_annotation
 
 # Optional chromosome filter applied BEFORE chunking (VEP is scattered over fixed-size
-# variant chunks, not per chromosome — see vep.variants_per_chunk). Empty list / unset =
-# annotate the whole input VCF; restrict here for a subset run (e.g. [chr21] for a smoke).
+# variant chunks, not per chromosome — see additional.vep.variants_per_chunk). Empty list /
+# unset = annotate the whole input VCF; restrict here for a subset run (e.g. [chr21] smoke).
 chromosomes: [chr1, chr2, chr3, chr4, chr5, chr6, chr7, chr8, chr9, chr10, chr11, chr12,
               chr13, chr14, chr15, chr16, chr17, chr18, chr19, chr20, chr21, chr22, chrX]
 
 # ── Reference (match the consumer's gene namespace; gtex-benchmark = gencode v34) ─────
 fasta: /s/genomes/Gencode/Gencode_human/release_34/GRCh38.primary_assembly.genome.fa
 gtf:   /s/genomes/Gencode/Gencode_human/release_34/gencode.v34.annotation.gtf.gz
-gff3:  /s/genomes/Gencode/Gencode_human/release_34/gencode.v34.annotation.gff3.gz  # Tier 0 fastVEP
+gff3:  /s/genomes/Gencode/Gencode_human/release_34/gencode.v34.annotation.gff3.gz  # fastVEP
 assembly: GRCh38
 
-# ── Per-tool annotation (the old "deep tier" umbrella is gone) ────────────────────────
-# fastVEP is the always-on base; every other tool has its own `enabled`. Output layout:
-#   OUT/distance_<distance>/<tool>.parquet/variant_type={SNV,indel,SV}/  (keyed on `variant_id`).
-# SV annotation is fastVEP-ONLY (`fastvep.include_sv`); every other tool is small-variant only
-# (setting include_sv on a non-fastvep tool is rejected).
-
-# ONE cis window for the whole pipeline: fastVEP --distance + the deep-tier selection threshold +
-# VEP --distance — and it prefixes the output dir (distance_<distance>/) so different runs coexist.
-# Bump toward 1000000 for the full cis range (output grows ~linearly).
-distance: 5000
-
-fastvep:               # always on; only needs gff3+fasta. Huge temp CSQ VCFs go to `scratch`.
-  include_sv: true
-  scratch: /scratch/tmp/tsi/fastvep
+# ── Annotation: fastVEP funnel + additional tools ────────────────────────────────────
+# fastVEP is the always-on DRIVER: it annotates the whole set, then applies the pipeline
+# filters (distance + protein_coding_only + canonical_only) to emit fastvep/small.vcf.gz —
+# the filtered VCF that every `additional` tool re-annotates (so heavy tools run only on the
+# near-gene / coding / canonical subset). All per-method outputs are combined into ONE
+# annotations.parquet, hive-partitioned by variant_type / gene_type / canonical. SVs are
+# fastVEP-only: their rows carry null additional-tool columns. Widen `distance` for longer
+# cis / distal reach (e2g reads the same filtered VCF, so extend the window rather than
+# feeding e2g the full VCF).
+fastvep:
+  distance: 5000             # fastVEP --distance AND the filtered-VCF selection window
+  protein_coding_only: true  # optional filter + partition key: keep gene_type == protein_coding
+  canonical_only: true       # optional filter + partition key: keep canonical transcripts
+  include_sv: true           # annotate the SV track too (fastVEP only; SVs never reach additional tools)
+  scratch: /scratch/tmp/tsi/fastvep   # shared FS for the temp CSQ VCFs (bgzipped, temp())
   parse_memory_limit: 64GB
   parse_threads: 6
 
-# ── Ensembl VEP ──────────────────────────────────────────────────────────────────────
-# Gene namespace is pinned to the config `gtf` via VEP `--gtf` (custom annotation) so it
-# matches the consumer exactly (gtex-benchmark = gencode v34) — NOT a prebuilt cache,
-# whose Ensembl release wouldn't match gencode v34. The `prepare_gtf` rule sorts + bgzips
-# + tabixes the GTF for VEP.
-vep:
-  enabled: false                               # opt-in (needs VEP + LOFTEE + plugin reference data)
-  plugin_dir: /path/to/ensembl-vep/Plugins     # cloned Ensembl/VEP_plugins
-  fork: 8
-  variants_per_chunk: 500000                   # VEP scatter granularity (1 Slurm job / chunk)
-  # ── VEP plugin reference data (download separately; see README) ─────────────────────
-  plugin_data:
-    cadd_snv:      /path/to/cadd/whole_genome_SNVs.tsv.gz
-    cadd_indel:    /path/to/cadd/gnomad.genomes.r3.0.indel.tsv.gz
-    spliceai_snv:  /path/to/spliceAI/spliceai_scores.raw.snv.hg38.vcf.gz
-    spliceai_indel: /path/to/spliceAI/spliceai_scores.raw.indel.hg38.vcf.gz
-    primateai:     /path/to/primateAI/PrimateAI_scores_v0.2_GRCh38_sorted.tsv.bgz
-    alphamissense: /path/to/AlphaMissense/AlphaMissense_hg38.tsv.gz
-    # (Condel/SIFT/PolyPhen are cache-only → not available in --gtf mode.)
-    # LOFTEE (https://github.com/konradjk/loftee, GRCh38 branch)
-    loftee_path:            /path/to/loftee
-    loftee_human_ancestor:  /path/to/loftee_data/human_ancestor.fa.gz
-    loftee_conservation:    /path/to/loftee_data/loftee.sql
-    loftee_gerp:            /path/to/loftee_data/gerp_conservation_scores.homo_sapiens.GRCh38.bw
+additional:                  # tools that RE-ANNOTATE fastvep/small.vcf.gz (small variants only)
+  # ── Ensembl VEP + plugins (LOFTEE/CADD/SpliceAI/PrimateAI/AlphaMissense) ────────────
+  # Gene namespace pinned to the config `gtf` via --gtf (not a cache) so Gene/Feature match
+  # the consumer. Transcript-level — joined into annotations.parquet on (variant_id, transcript).
+  vep:
+    enabled: false                               # opt-in (needs VEP + LOFTEE + plugin reference data)
+    distance: 5000                               # VEP's own --distance (native); typically = fastvep.distance
+    plugin_dir: /path/to/ensembl-vep/Plugins     # cloned Ensembl/VEP_plugins
+    fork: 8
+    variants_per_chunk: 500000                   # VEP scatter granularity (1 Slurm job / chunk)
+    plugin_data:                                 # download separately; see README
+      cadd_snv:      /path/to/cadd/whole_genome_SNVs.tsv.gz
+      cadd_indel:    /path/to/cadd/gnomad.genomes.r3.0.indel.tsv.gz
+      spliceai_snv:  /path/to/spliceAI/spliceai_scores.raw.snv.hg38.vcf.gz
+      spliceai_indel: /path/to/spliceAI/spliceai_scores.raw.indel.hg38.vcf.gz
+      primateai:     /path/to/primateAI/PrimateAI_scores_v0.2_GRCh38_sorted.tsv.bgz
+      alphamissense: /path/to/AlphaMissense/AlphaMissense_hg38.tsv.gz
+      # (Condel/SIFT/PolyPhen are cache-only → not available in --gtf mode.)
+      loftee_path:            /path/to/loftee    # LOFTEE (konradjk/loftee, GRCh38 branch)
+      loftee_human_ancestor:  /path/to/loftee_data/human_ancestor.fa.gz
+      loftee_conservation:    /path/to/loftee_data/loftee.sql
+      loftee_gerp:            /path/to/loftee_data/gerp_conservation_scores.homo_sapiens.GRCh38.bw
 
-# ── NMD-Scanner (gagneurlab/NMD-Scanner) — NMD escape prediction for PTCs ─────────────
-# Uses the config `gtf` + `fasta`. Installed via pip (envs/nmd.yaml). Refines pLoF: a
-# stop_gained / frameshift that ESCAPES NMD behaves very differently from one that triggers it.
-nmd:
-  enabled: false
-  reassign_exons: false   # set true for hg19 exon numbering
+  # ── ENCODE-rE2G enhancer -> target gene (gene-level; joined on gene_id) ──────────────
+  # Overlaps the filtered variants with ENCODE-rE2G enhancers -> target gene + rE2G score,
+  # from the on-disk star-schema export (predictions dir + enhancers.parquet; no liftOver).
+  e2g:
+    enabled: false
+    distance_to_tss: null          # optional cap on the reported variant->TSS distance (null = no cap)
+    predictions: /s/raw/e2g/enhancer_gene_predictions   # per-chrom prediction parquets
+    enhancers:   /s/raw/e2g/enhancers.parquet           # enhancer id -> chrom/start/end/class
+    model: ENCODE-rE2G             # vs scE2G
+    score_threshold: 0.5
+    classes: [genic, intergenic]   # distal; drop promoter
+    cell_types: null               # null = all biosamples; or a list of cell_type_id to restrict
+    memory_limit: 32GB
+    threads: 4
 
-# ── AbSplice (gagneurlab/absplice) ───────────────────────────────────────────────────
-# Running AbSplice from scratch (per-tissue SpliceMaps + SpliceAI + GPU) is out of scope;
-# instead point `result` at a *precomputed* AbSplice2 result — a directory of per-gene
-# `*_max_preds.parquet` datasets. SNV-only; `AbSplice_DNA_max` / `AbSplice2_max` (max over
-# the 49 GTEx tissues) are joined per (variant, gene). Indels get no score.
-absplice:
-  enabled: false
-  result: /path/to/absplice/snv_avsplice2_all_max_preds/hg38/model_XX  # per-gene *_max_preds.parquet dir (SNV/indel only)
-
-# ── E2G: ENCODE-rE2G enhancer -> gene (hg38, precomputed; per variant) ─────────────────
-# Overlaps variants with ENCODE-rE2G enhancer elements -> target gene + rE2G score, from the
-# on-disk E2G star-schema export (predictions dir + enhancers.parquet; no liftOver). Standalone
-# output e2g/e2g.parquet (grain = variant x target_gene), joined by the consumer on variant_id.
-e2g:
-  enabled: false                 # opt-in
-  predictions: /s/raw/e2g/enhancer_gene_predictions   # per-chrom prediction parquets (small-variant only)
-  enhancers:   /s/raw/e2g/enhancers.parquet           # enhancer id -> chrom/start/end/class
-  model: ENCODE-rE2G             # vs scE2G
-  score_threshold: 0.5
-  classes: [genic, intergenic]   # distal; drop promoter
-  cell_types: null               # null = all biosamples; or a list of cell_type_id to restrict
-  memory_limit: 32GB
-  threads: 4
+  # ── AbSplice2 precomputed lookup (gene-level; joined on gene_id; SNV/indel) ──────────
+  # Not run here — point `result` at a precomputed AbSplice2 result: a dir of per-gene
+  # `*_max_preds.parquet` (AbSplice_DNA_max / AbSplice2_max, max over the 49 GTEx tissues),
+  # joined per (variant, gene).
+  absplice:
+    enabled: false
+    result: /path/to/absplice/snv_avsplice2_all_max_preds/hg38/model_XX

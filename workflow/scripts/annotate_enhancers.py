@@ -57,10 +57,12 @@ def _sql_in(vals) -> str | None:
     return "(" + ",".join("'" + str(v).replace("'", "''") + "'" for v in vals) + ")"
 
 
-def main(vcf, predictions, enhancers, gtf, out_dir, *, model, score_threshold,
-         classes, cell_types, memory_limit="32GB", threads=4):
+def main(vcf, predictions, enhancers, gtf, out_parquet, *, model, score_threshold,
+         classes, cell_types, distance_to_tss=None, memory_limit="32GB", threads=4):
     t0 = time.time()
-    tmp = Path(out_dir).parent / "duckdb_tmp"
+    out_parquet = Path(out_parquet)
+    out_parquet.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out_parquet.parent / "duckdb_tmp"
     tmp.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect()
     con.execute(f"PRAGMA memory_limit='{memory_limit}'")
@@ -126,24 +128,18 @@ def main(vcf, predictions, enhancers, gtf, out_dir, *, model, score_threshold,
             SELECT h.variant_id,
                    coalesce(g.gene_id, h.target_gene_id) AS target_gene_id,  -- versioned if mapped
                    h.target_gene_name, h.e2g_score, h.enhancer_class,
-                   h.distance_to_tss, h.n_cell_types,
-                   -- variant_type (hive partition) from the chrom_start_ref_alt id; e2g is small-only
-                   CASE WHEN length(str_split(h.variant_id, '_')[3]) = 1
-                         AND length(str_split(h.variant_id, '_')[4]) = 1
-                        THEN 'SNV' ELSE 'indel' END AS variant_type
+                   h.distance_to_tss, h.n_cell_types
             FROM hits h
             LEFT JOIN gene_map g ON h.target_gene_id = g.gene_id_unversioned
     """)
-    for vt in ("SNV", "indel"):
-        d = Path(out_dir) / f"variant_type={vt}"
-        d.mkdir(parents=True, exist_ok=True)
-        con.execute(f"COPY (SELECT * EXCLUDE (variant_type) FROM e2g WHERE variant_type = '{vt}') "
-                    f"TO '{d / 'data.parquet'}' (FORMAT parquet)")
+    # Optional cap on the reported variant->TSS distance (null = keep all links).
+    dist_where = "" if distance_to_tss is None else f"WHERE distance_to_tss <= {int(distance_to_tss)}"
+    con.execute(f"COPY (SELECT * FROM e2g {dist_where}) TO '{out_parquet}' (FORMAT parquet)")
     s = con.execute(
         f"SELECT count(*) n, count(DISTINCT variant_id) v, count(DISTINCT target_gene_id) g "
-        f"FROM read_parquet('{Path(out_dir)}/**/*.parquet', hive_partitioning=true)"
+        f"FROM read_parquet('{out_parquet}')"
     ).fetchone()
-    print(f"wrote e2g.parquet/variant_type={{SNV,indel}} in {time.time()-t0:.1f}s")
+    print(f"wrote {out_parquet} in {time.time()-t0:.1f}s (distance_to_tss cap={distance_to_tss})")
     print(f"  rows={s[0]:,} variants_in_enhancer={s[1]:,} target_genes={s[2]:,}")
 
 
@@ -151,7 +147,8 @@ if __name__ == "__main__":
     smk = snakemake  # noqa: F821
     p = smk.params
     main(
-        smk.input.vcf, p.predictions, p.enhancers, p.gtf, p.out_dir,
+        smk.input.vcf, p.predictions, p.enhancers, p.gtf, smk.output.parquet,
         model=p.model, score_threshold=p.score_threshold, classes=p.classes,
-        cell_types=p.cell_types, memory_limit=p.memory_limit, threads=int(p.threads),
+        cell_types=p.cell_types, distance_to_tss=p.distance_to_tss,
+        memory_limit=p.memory_limit, threads=int(p.threads),
     )

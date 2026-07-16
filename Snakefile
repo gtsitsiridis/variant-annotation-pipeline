@@ -1,18 +1,18 @@
 """variant_annotation — dataset-agnostic functional annotation of a variant set.
 
-Per-tool annotation over a generic VCF (small variants ID=chrom_start_ref_alt; SVs ID=sv_id),
-under a distance-keyed layout: OUT/distance_<distance>/<tool>.parquet/variant_type=<vtype>/,
-each hive-partitioned by variant_type and keyed on `variant_id`.
+fastVEP is the always-on DRIVER: it annotates the whole set (small variants ID=chrom_start_ref_alt;
+optional SVs ID=sv_id), the CSQ is exploded + joined to transcript_metadata into ONE flat base table
+(parts/fastvep.parquet), and the small variants are filtered (distance + protein_coding_only +
+canonical_only) to `fastvep/small.vcf.gz`. Every enabled `additional` tool re-annotates that filtered
+VCF, and combine LEFT-joins them all into ONE `annotations.parquet`, hive-partitioned by
+variant_type / gene_type / canonical.
 
-  fastVEP   ALWAYS on (only gff3+fasta). Broad per-transcript consequence/distance over the
-            whole set; the only SV-capable tool (fastvep.include_sv). Base for the `distance`
-            selection used by the other tools.  -> distance_<d>/fastvep.parquet/
-  VEP       opt-in (vep.enabled). LOFTEE/CADD/SpliceAI/PrimateAI/AlphaMissense on the small set
-            selected within `distance` of a gene (chunked).  -> distance_<d>/vep.parquet/
-  NMD / AbSplice / E2G   opt-in — PENDING migration to this layout (enabling one errors).
+  fastVEP   ALWAYS on (gff3 + fasta). Base annotation + the funnel; the only SV-capable tool.
+  vep       additional (additional.vep.enabled). LOFTEE/CADD/SpliceAI/PrimateAI/AlphaMissense — transcript-level.
+  e2g       additional (additional.e2g.enabled). ENCODE-rE2G enhancer -> target gene — gene-level.
+  absplice  additional (additional.absplice.enabled). Precomputed AbSplice2 lookup — gene-level, SNV-only.
 
-A single top-level `distance` drives fastVEP `--distance`, the selection window, and VEP
-`--distance`. Configure via config.yaml (or --configfile), or pass config as a Snakemake `module`.
+Configure via config.yaml (or --configfile), or pass config as a Snakemake `module`.
 """
 from pathlib import Path
 
@@ -20,54 +20,35 @@ configfile: "config.yaml"
 
 OUT = Path(config["output_dir"])
 
-# ── Per-tool flags (the retired "deep tier" umbrella is gone) ─────────────────────────
-# fastVEP is the always-on base. Every other tool has its own `enabled` + `distance`. Each tool
-# writes OUT/<tool>/variant_type={SNV,indel,SV}/ keyed on variant_id. SV annotation is fastVEP-only
-# for now (`fastvep.include_sv`); every other tool is small-variant only.
-VEP = config.get("vep", {}).get("enabled", False)
-NMD = config.get("nmd", {}).get("enabled", False)
-ABSPLICE = config.get("absplice", {}).get("enabled", False)
-E2G = config.get("e2g", {}).get("enabled", False)
+# ── additional-tool enable flags (each re-annotates fastVEP's filtered VCF) ───────────
+_ADD = config.get("additional", {})
+VEP = _ADD.get("vep", {}).get("enabled", False)
+E2G = _ADD.get("e2g", {}).get("enabled", False)
+ABSPLICE = _ADD.get("absplice", {}).get("enabled", False)
 
-# SV annotation is fastVEP-only for now. Reject include_sv on any other tool so the flag never lies.
-for _t in ("vep", "nmd", "absplice", "e2g"):
-    if config.get(_t, {}).get("include_sv", False):
-        raise ValueError(f"{_t}.include_sv is not supported — SV annotation is fastVEP-only. Remove it.")
+# SV annotation is fastVEP-only. Reject include_sv on any additional tool so the flag never lies.
+for _t in ("vep", "e2g", "absplice"):
+    if _ADD.get(_t, {}).get("include_sv", False):
+        raise ValueError(f"additional.{_t}.include_sv is not supported — SV annotation is fastVEP-only.")
+
+# NMD is not yet migrated to the fastVEP-funnel layout — fail loudly rather than run stale machinery.
+if _ADD.get("nmd", {}).get("enabled", False):
+    raise ValueError("nmd is not migrated to the fastVEP-funnel layout yet. "
+                     "Available additional tools: vep, e2g, absplice.")
 
 wildcard_constraints:
-    chunk = r"\d+",
-    track = r"small|sv",
-    vtype = r"SNV|indel|SV",
+    chunk=r"\d+",
 
-include: "workflow/rules/fastvep.smk"        # Tier 0 base — always; defines FASTVEP_TARGETS
-
-# fastVEP + VEP are migrated to the per-tool distance_<d>/<tool>.parquet/variant_type layout.
-# VEP selects its (small) analysis set from the fastVEP `distance` annotation, chunks + runs VEP,
-# and writes distance_<d>/vep.parquet/variant_type={SNV,indel}/ keyed on variant_id.
+include: "workflow/rules/fastvep.smk"        # base + funnel: parts/fastvep.parquet + fastvep/small.vcf.gz
 if VEP:
-    include: "workflow/rules/select.smk"     # ANALYSIS_SET from the fastVEP distance partitions
-    include: "workflow/rules/vep.smk"        # defines VEP_DIR + the vep_parquet target
+    include: "workflow/rules/vep.smk"        # -> parts/vep.parquet
 if E2G:
-    include: "workflow/rules/e2g.smk"        # standalone (reads input_vcf + ENCODE-rE2G tables); defines E2G_DIR
-
-# nmd / absplice are still pending migration to the new layout; enabling one fails loudly
-# rather than running the retired deep-tier machinery.
-_PENDING = [t for t, on in (("nmd", NMD), ("absplice", ABSPLICE)) if on]
-if _PENDING:
-    raise ValueError(
-        "tools not yet migrated to the per-tool <tool>/variant_type layout: "
-        + ", ".join(_PENDING) + ". Available: fastVEP, VEP, e2g.")
-
-
-def _targets():
-    t = list(FASTVEP_TARGETS)
-    if VEP:
-        t += [VEP_DIR / f"variant_type={vt}" for vt in ("SNV", "indel")]
-    if E2G:
-        t += [E2G_DIR / f"variant_type={vt}" for vt in ("SNV", "indel")]
-    return [str(x) for x in t]
+    include: "workflow/rules/e2g.smk"        # -> parts/e2g.parquet
+if ABSPLICE:
+    include: "workflow/rules/absplice.smk"   # -> parts/absplice.parquet
+include: "workflow/rules/combine.smk"        # -> annotations.parquet (always; base + enabled tools)
 
 
 rule all:
     input:
-        _targets(),
+        [str(ANNOTATIONS_DIR / f"variant_type={vt}") for vt in COMBINE_VTYPES],

@@ -1,6 +1,6 @@
 # CLAUDE.md — variant-annotation-pipeline-v2
 
-Living notes for Claude. **Keep this updated** as the pipeline evolves. Last updated: 2026-06-26.
+Living notes for Claude. **Keep this updated** as the pipeline evolves. Last updated: 2026-07-16.
 
 ## What this is
 The **dataset-agnostic annotation engine**: a generic unique-variant VCF in → annotation
@@ -9,37 +9,47 @@ adapter) either **standalone** or as a Snakemake **`module`**. GitLab remote
 `gagneurlab/variant-annotation-pipeline-v2`. (⚠️ This **v2** repo superseded an older
 `~/projects/variant_annotation`, which was deleted 2026-06-26 — v2 is canonical.)
 
-## Architecture — per-tool, distance-keyed (REDESIGNED 2026-07-16; the "deep tier" is gone)
-Each tool has its own `enabled` flag (`fastvep` always-on). ONE top-level **`distance`** drives
-fastVEP `--distance`, the deep-tool variant selection, and VEP `--distance`. Uniform output:
-**`OUT/distance_<distance>/<tool>.parquet/variant_type={SNV,indel,SV}/`** — each hive-partitioned by
-`variant_type`, keyed on **`variant_id`** (`chrom_start_ref_alt` small / `sv_id` SV). `transcript_metadata.parquet`
-is distance-independent (top level). Dataset-agnostic: NO freq/svtype — the consumer rejoins those.
-- **`fastvep.smk`** (ALWAYS on; only gff3+fasta): fastVEP over the whole set per `{track}` — `small`
-  (`input_vcf`) + optional `sv` (`sv_vcf`, gated by `fastvep.include_sv`; **SV is fastVEP-only**).
-  `parse_fastvep.py` splits `small`→`variant_type={SNV,indel}` (ref/alt) and `sv`→`SV` →
-  `distance_<d>/fastvep.parquet/variant_type=.../`. The base annotation + the `distance` selection source.
-- **`vep.smk`** (`vep.enabled`): `select.smk` picks the small set within `distance` of a gene (from
-  fastVEP's `distance` annotation) → `analysis_set.vcf.gz`; `chunk_vcf` → chunked VEP (`--gtf`,
-  `--distance {config.distance}`) + plugins (LOFTEE/CADD/SpliceAI/PrimateAI/AlphaMissense); `parse_vep.py`
-  carries `variant_id`+`variant_type`; `vep_parquet` concats → `distance_<d>/vep.parquet/variant_type=.../`.
-  Canonical is NOT merged (join `transcript_metadata` downstream) — so `merge.smk`/`merge_annotations.py`/
-  `build_canonical` are **retired/dead**.
-- **`e2g.smk`** (`e2g.enabled`): standalone (reads `input_vcf` + the ENCODE-rE2G tables, no selection);
-  `annotate_enhancers.py` overlaps variants with enhancers, derives `variant_type` from `variant_id`
-  → `distance_<d>/e2g.parquet/variant_type={SNV,indel}/` (small-only, grain variant×target_gene).
-- **NMD / AbSplice** — still on the old machinery; **PENDING migration** to `<tool>.parquet/
-  variant_type`. The Snakefile keeps them in a `_PENDING` guard (enabling one raises a clear error).
+## Architecture — fastVEP funnel + combined annotations.parquet (REWORKED 2026-07-16)
+fastVEP is the always-on **driver/funnel**. It annotates the whole set, becomes the **base** table,
+AND emits a **filtered VCF** that every `additional` tool re-annotates; combine LEFT-joins them into
+ONE `annotations.parquet`. Config = `fastvep:` (the driver + its filters) + `additional:` (vep/e2g/
+absplice, each `enabled`). NO `distance_<d>/` prefix. Output layout:
+```
+OUT/ transcript_metadata.parquet          # gencode GTF -> gene_type/canonical/biotype/tsl/symbol (shared)
+     fastvep/ small.csq.vcf.gz sv.csq.vcf.gz (temp)   small.vcf.gz (persisted filtered VCF)
+     parts/  fastvep.parquet vep.parquet e2g.parquet absplice.parquet   (temp per-method)
+     annotations.parquet/variant_type=<vt>/gene_type=<gt>/canonical=<bool>/   (FINAL, hive)
+```
+- **`fastvep.smk`** (ALWAYS): `rule fastvep` annotates each `{track}` (`small`=input_vcf, `sv`=sv_vcf if
+  `fastvep.include_sv`) → temp **bgzipped** `{track}.csq.vcf.gz` (`fastvep -o /dev/stdout | bgzip`).
+  `parse_fastvep.py` UNIONs the tracks → ONE flat `parts/fastvep.parquet` (variant×transcript, a
+  `variant_type` col, joined to transcript_metadata for gene_type/canonical). `select_analysis_set.py`
+  filters the small rows (distance + protein_coding_only + canonical_only) → ids → `bcftools view` →
+  **`fastvep/small.vcf.gz`** (the funnel output; only built when an additional tool needs it).
+- **`vep.smk`** (`additional.vep.enabled`): `chunk_vcf` splits `fastvep/small.vcf.gz` → chunked VEP
+  (`--gtf`, `--distance {additional.vep.distance}`) + plugins (LOFTEE/CADD/SpliceAI/PrimateAI/AlphaMissense);
+  `parse_vep.py` (variant_id + `Feature`=transcript + plugin/LoF/SpliceAI/Consequence cols) → concat →
+  `parts/vep.parquet`.
+- **`e2g.smk`** (`additional.e2g.enabled`): `annotate_enhancers.py` overlaps `fastvep/small.vcf.gz` with
+  ENCODE-rE2G enhancers, optional `distance_to_tss` cap → `parts/e2g.parquet` (variant×target_gene, gene-level).
+- **`absplice.smk`** (`additional.absplice.enabled`): `run_absplice.py` joins the precomputed AbSplice2
+  result onto `fastvep/small.vcf.gz` on (chrom,start,ref,alt), version-maps the gene → `parts/absplice.parquet`
+  (variant×gene, gene-level, SNV-only).
+- **`combine.smk`** (ALWAYS): `combine_annotations.py` (DuckDB) = base `parts/fastvep.parquet` (+ filters)
+  LEFT JOIN vep on (variant_id, transcript) + e2g/absplice on (variant_id, gene) → `annotations.parquet`
+  PARTITION_BY (variant_type, gene_type, canonical). SV rows: additional cols null (SVs are fastVEP-only).
 
-`Snakefile`: `include fastvep.smk` always; `if VEP: include select + vep`; `if E2G: include e2g`;
-nmd/absplice pending. `rule all` = fastVEP (+ vep + e2g) partition dirs. `include_sv` is rejected on
-any non-fastvep tool.
+`Snakefile`: `include fastvep.smk` always; `if additional.<tool>.enabled: include vep/e2g/absplice`;
+`include combine.smk` always. `rule all` = the `annotations.parquet/variant_type=…` dirs. `include_sv`
+rejected on any additional tool; **NMD** is out of scope (enabling `additional.nmd` errors — not yet
+migrated to the funnel). Retired: `select.smk`, `merge.smk`/`merge_annotations.py`, `build_canonical.py`,
+the `distance_<d>/<tool>.parquet` per-tool layout.
 
 ## Gotchas (learned the hard way)
 - **`script:` files must NOT have a line-1 `from __future__ import annotations`** — Snakemake
   prepends a preamble, pushing the future import off line 1 → SyntaxError at runtime. (Bit the
-  Tier-0/E2G run 2026-06-26; fixed. Convention: py3.12 conda envs support modern hints natively.)
-  build_canonical/parse_vep/merge_annotations/run_absplice all carry the same NB.
+  run 2026-06-26; fixed. Convention: py3.12 conda envs support modern hints natively.)
+  parse_fastvep/parse_vep/annotate_enhancers/run_absplice/combine_annotations all carry the same NB.
 - **Module `config:` REPLACES** the module's config (does not merge with `configfile:`). The
   parent must pass the COMPLETE config (see README "as a module"). This repo's own `configfile:`
   is inert under module loading.
@@ -51,12 +61,14 @@ any non-fastvep tool.
   `chromosome` is **UNprefixed** ("21"); `target_gene_id` is **unversioned** → mapped to gencode
   versioned via the gtf. Models: ENCODE-rE2G (default) + scE2G. Default keeps `genic`+`intergenic`
   classes (drops promoter), score≥0.5, all cell_types (heavy genome-wide — restrict for speed).
-- **VEP `--gtf`** (no cache): SIFT/PolyPhen/Condel + cached gnomAD AF unavailable; `--canonical`
-  inert → reconstruct from GTF (`build_canonical.py`). **NMD-Scanner**: use CSV output (parquet
-  writer buggy). Chunked VEP scatter (deeprvat-style) avoids a big-chromosome straggler.
-- **Minor debt:** `build_transcript_metadata.py` (Tier 0) overlaps `build_canonical.py` (deep) —
-  both derive canonical from the GTF. Kept separate to not disturb the validated deep merge;
-  consolidate later.
+- **VEP `--gtf`** (no cache): SIFT/PolyPhen/Condel + cached gnomAD AF unavailable; `--canonical` inert
+  → canonical/gene_type come from `transcript_metadata` (joined in `parse_fastvep`, the combine base).
+  Chunked VEP scatter (deeprvat-style) avoids a big-chromosome straggler.
+- **combine join keys:** vep on `(variant_id, transcript==vep.Feature)`; e2g/absplice on `(variant_id,
+  gene)` (gene-level → broadcast across the gene's transcript rows). `combine_annotations._*_DROP` lists
+  the tool columns dropped as join-keys / base-duplicates; e2g cols get an `e2g_` prefix.
+- **partition boolean:** `annotations.parquet` partitions on `canonical` (bool) → `canonical=true/false`
+  dirs; hive readers may surface it as a string — cast/compare as needed.
 
 ## Conventions
 - Snakemake; per-rule `conda:` envs (`envs/*.yaml`). Run with `--use-conda` (+ `profiles/slurm`
@@ -66,7 +78,10 @@ any non-fastvep tool.
   `config.local.yaml` = real paths (gitignored); `config.smoke.yaml` = chr21 check.
 - DuckDB for the big explodes/overlaps (parse_fastvep, annotate_enhancers); polars elsewhere.
 
-## Build status (2026-06-26)
-- Deep tier (VEP+plugins+NMD+AbSplice, chunked) run end-to-end on the full 30M GTEx set.
-- Tier 0 fastVEP + selector funnel + E2G added; tier-gating Snakefile; `--use-conda` envs incl.
-  fastvep cargo. Dry-runs pass (Tier 0 / deep / e2g); first full Tier-0+E2G run validating now.
+## Build status (2026-07-16)
+- Reworked to the fastVEP-funnel + combined `annotations.parquet` model (this session). fastvep base →
+  filtered VCF → vep/e2g/absplice → combine (PARTITION_BY variant_type/gene_type/canonical).
+- Dry-runs pass: fastvep-only (5 jobs) and all-tools (11 jobs). `combine_annotations.py` +
+  `parse_fastvep.py` synthetic-tested (joins, SV-null additional cols, hive round-trip, filters).
+- NOT yet run on the cluster with the real conda tools (VEP/AbSplice reference data). NMD deferred
+  (still on the old machinery; enabling `additional.nmd` errors).

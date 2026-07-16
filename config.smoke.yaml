@@ -1,33 +1,52 @@
-# Smoke config — chr21 only, AbSplice off. Fast end-to-end check of VEP+plugins+NMD
-# with --use-conda. Derived from config.yaml; fill the same VEP plugin/data paths.
+# Smoke config — a fast standalone check of the fastVEP funnel (+ additional tools if you fill
+# their paths and run with --use-conda). `chromosomes: [chr21]` restricts the VEP chunk region;
+# fastVEP still annotates the whole input_vcf (point input_vcf at a chr21-only VCF for a true smoke).
 input_vcf: /data/nasif12/home_if12/tsi/projects/gtex-benchmark/output/variants/variants.vcf.gz
 output_dir: /data/nasif12/home_if12/tsi/projects/gtex-benchmark/output/variant_annotation/smoke
-chromosomes:
-- chr21
+chromosomes: [chr21]
 fasta: /s/genomes/Gencode/Gencode_human/release_34/GRCh38.primary_assembly.genome.fa
-gtf: /s/genomes/Gencode/Gencode_human/release_34/gencode.v34.annotation.gtf.gz
+gtf:   /s/genomes/Gencode/Gencode_human/release_34/gencode.v34.annotation.gtf.gz
+gff3:  /s/genomes/Gencode/Gencode_human/release_34/gencode.v34.annotation.gff3.gz
 assembly: GRCh38
-vep:
-  plugin_dir: /path/to/ensembl-vep/Plugins
-  fork: 8
-  plugin_data:
-    cadd_snv: /path/to/cadd/whole_genome_SNVs.tsv.gz
-    cadd_indel: /path/to/cadd/gnomad.genomes.r3.0.indel.tsv.gz
-    spliceai_snv: /path/to/spliceAI/spliceai_scores.raw.snv.hg38.vcf.gz
-    spliceai_indel: /path/to/spliceAI/spliceai_scores.raw.indel.hg38.vcf.gz
-    primateai: /path/to/primateAI/PrimateAI_scores_v0.2_GRCh38_sorted.tsv.bgz
-    alphamissense: /path/to/AlphaMissense/AlphaMissense_hg38.tsv.gz
-    loftee_path: /path/to/loftee
-    loftee_human_ancestor: /path/to/loftee_data/human_ancestor.fa.gz
-    loftee_conservation: /path/to/loftee_data/loftee.sql
-    loftee_gerp: /path/to/loftee_data/gerp_conservation_scores.homo_sapiens.GRCh38.bw
-nmd:
-  enabled: true
-  reassign_exons: false
-absplice:
-  enabled: false
-  result: /path/to/absplice/output/AbSplice_DNA.parquet
-  tissues:
-  - Adipose_Subcutaneous
-  - Whole_Blood
-  per_tissue: false
+
+fastvep:
+  distance: 5000
+  protein_coding_only: true
+  canonical_only: true
+  include_sv: false
+  scratch: /scratch/tmp/tsi/fastvep_smoke
+  parse_memory_limit: 16GB
+  parse_threads: 4
+
+additional:
+  vep:
+    enabled: false
+    distance: 5000
+    plugin_dir: /path/to/ensembl-vep/Plugins
+    fork: 8
+    variants_per_chunk: 500000
+    plugin_data:
+      cadd_snv: /path/to/cadd/whole_genome_SNVs.tsv.gz
+      cadd_indel: /path/to/cadd/gnomad.genomes.r3.0.indel.tsv.gz
+      spliceai_snv: /path/to/spliceAI/spliceai_scores.raw.snv.hg38.vcf.gz
+      spliceai_indel: /path/to/spliceAI/spliceai_scores.raw.indel.hg38.vcf.gz
+      primateai: /path/to/primateAI/PrimateAI_scores_v0.2_GRCh38_sorted.tsv.bgz
+      alphamissense: /path/to/AlphaMissense/AlphaMissense_hg38.tsv.gz
+      loftee_path: /path/to/loftee
+      loftee_human_ancestor: /path/to/loftee_data/human_ancestor.fa.gz
+      loftee_conservation: /path/to/loftee_data/loftee.sql
+      loftee_gerp: /path/to/loftee_data/gerp_conservation_scores.homo_sapiens.GRCh38.bw
+  e2g:
+    enabled: false
+    distance_to_tss: null
+    predictions: /s/raw/e2g/enhancer_gene_predictions
+    enhancers: /s/raw/e2g/enhancers.parquet
+    model: ENCODE-rE2G
+    score_threshold: 0.5
+    classes: [genic, intergenic]
+    cell_types: null
+    memory_limit: 32GB
+    threads: 4
+  absplice:
+    enabled: false
+    result: /path/to/absplice/snv_avsplice2_all_max_preds/hg38/model_XX
