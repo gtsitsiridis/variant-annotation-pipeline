@@ -169,6 +169,6 @@ rule vep_parquet:
         parquet=PARTS / "vep.parquet",
     run:
         import polars as pl
-        (pl.concat([pl.scan_parquet(p) for p in input.parquets])
-           .collect(engine="streaming")
-           .write_parquet(output.parquet))
+        # sink_parquet streams the concat straight to disk (bounded memory); collect() materialized
+        # all 41 chunks first and OOM'd at the default 8 GB.
+        pl.concat([pl.scan_parquet(p) for p in input.parquets]).sink_parquet(output.parquet)
