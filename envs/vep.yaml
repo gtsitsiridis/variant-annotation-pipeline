@@ -12,6 +12,9 @@ dependencies:
   - htslib          # bgzip / tabix (prepare_gtf, chunk_vcf)
   - samtools
   # LOFTEE perl deps (do NOT pin `perl` — let ensembl-vep pull a compatible 5.32)
+  - perl-bioperl      # Bio::Perl — LoF.pm fails to compile without it ("Can't locate Bio/Perl.pm")
   - perl-bio-db-hts   # Bio::DB::HTS
   - perl-dbd-sqlite   # conservation SQL (loftee.sql); pulls perl-dbi
   - perl-dbi
+  # NB: LOFTEE's GERP filter needs Bio::DB::BigWig (no clean conda pkg). If LoF errors at runtime on
+  # the gerp_bigwig, drop `gerp_bigwig:` from the LoF plugin args in vep.smk — LOFTEE runs without it.
