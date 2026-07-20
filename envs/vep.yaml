@@ -1,13 +1,17 @@
 name: variant_annotation-vep
+# conda-forge MUST come before bioconda (+ strict channel priority, miniforge's default): with
+# bioconda first, the solver picks the old perl-bio-db-hts build (perl 5.26) which conflicts with
+# ensembl-vep's perl 5.32 (LibMambaUnsatisfiableError). ensembl-vep pinned to 113 to match the
+# VEP_113 plugin dir AND because its dep set solves cleanly (verified: 285 pkgs).
 channels:
-  - bioconda
   - conda-forge
+  - bioconda
 dependencies:
-  - ensembl-vep=110
+  - ensembl-vep=113
   - bcftools
-  - htslib
+  - htslib          # bgzip / tabix (prepare_gtf, chunk_vcf)
   - samtools
-  - perl
-  # LOFTEE perl deps
+  # LOFTEE perl deps (do NOT pin `perl` — let ensembl-vep pull a compatible 5.32)
+  - perl-bio-db-hts   # Bio::DB::HTS
+  - perl-dbd-sqlite   # conservation SQL (loftee.sql); pulls perl-dbi
   - perl-dbi
-  - perl-bio-db-hts
