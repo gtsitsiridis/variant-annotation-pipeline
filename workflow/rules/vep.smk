@@ -19,6 +19,12 @@ VEP_CFG = config["additional"]["vep"]
 VEP_PD = VEP_CFG["plugin_data"]
 VEP_DISTANCE = VEP_CFG.get("distance", FASTVEP_DISTANCE)   # VEP's own --distance (native)
 REF = OUT / "ref"
+# bioperl >=1.7.3 (the conda `perl-bioperl` 1.7.8 build) DROPPED Bio/Perl.pm, but LOFTEE's LoF.pm
+# still does `use Bio::Perl;` -> "Can't locate Bio/Perl.pm" -> the LoF plugin silently fails to
+# compile (no LoF columns). We ship the last version that had it (bioperl 1.7.2, deps Carp/
+# Bio::SeqIO/Bio::Seq/Bio::Root::Version all present in the env) and prepend it to PERL5LIB.
+LOFTEE_BIOPERL_SHIM = os.path.dirname(os.path.dirname(
+    workflow.source_path("../resources/perl/Bio/Perl.pm")))
 # CHUNKS / CHUNK_SIZE / chunk_ids() + the chunk_vcf checkpoint live in chunk.smk (shared with NMD),
 # included before this file.
 
@@ -95,14 +101,16 @@ rule vep:
         fork=VEP_CFG["fork"],
         plugins=PLUGIN_ARGS,
         loftee_path=VEP_PD["loftee_path"],
+        bioperl_shim=LOFTEE_BIOPERL_SHIM,
         distance=VEP_DISTANCE,
     conda:
         "../../envs/vep.yaml"
     shell:
-        # PERL5LIB must include LOFTEE for its modules to load; ${{PERL5LIB:-}} guards `set -u`.
+        # PERL5LIB must include LOFTEE for its modules to load + the Bio::Perl shim (bioperl 1.7.8
+        # dropped Bio/Perl.pm, which LoF.pm requires); ${{PERL5LIB:-}} guards `set -u`.
         # NB: NO --offline (forces a cache, incompatible with --gtf). SIFT/PolyPhen + cached
         # gnomAD AF are cache-only → unavailable in --gtf mode.
-        "PERL5LIB={params.loftee_path}:${{PERL5LIB:-}} "
+        "PERL5LIB={params.bioperl_shim}:{params.loftee_path}:${{PERL5LIB:-}} "
         "vep --gtf {input.gtf} --fasta {input.fasta} "
         "    --dir_plugins {params.plugin_dir} --assembly {params.assembly} "
         "    --fork {params.fork} --force_overwrite --tab --compress_output bgzip --no_stats "
