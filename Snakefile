@@ -37,6 +37,8 @@ wildcard_constraints:
     chunk=r"\d+",
 
 include: "workflow/rules/fastvep.smk"        # base + funnel: parts/fastvep.parquet + fastvep/small.vcf.gz
+if VEP or NMD:
+    include: "workflow/rules/chunk.smk"      # shared chunk_vcf scatter (VEP + NMD)
 if VEP:
     include: "workflow/rules/vep.smk"        # -> parts/vep.parquet
 if NMD:

@@ -19,12 +19,12 @@ fastvep:
   parse_threads: 4
 
 additional:
+  variants_per_chunk: 500000   # shared VEP/NMD chunk_vcf scatter granularity
   vep:
     enabled: false
     distance: 5000
     plugin_dir: /path/to/ensembl-vep/Plugins
     fork: 8
-    variants_per_chunk: 500000
     plugin_data:
       cadd_snv: /path/to/cadd/whole_genome_SNVs.tsv.gz
       cadd_indel: /path/to/cadd/gnomad.genomes.r3.0.indel.tsv.gz

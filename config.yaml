@@ -44,6 +44,7 @@ fastvep:
   parse_threads: 6
 
 additional:                  # tools that RE-ANNOTATE fastvep/small.vcf.gz (small variants only)
+  variants_per_chunk: 500000   # shared VEP/NMD chunk_vcf scatter granularity (1 Slurm job per chunk)
   # ── Ensembl VEP + plugins (LOFTEE/CADD/SpliceAI/PrimateAI/AlphaMissense) ────────────
   # Gene namespace pinned to the config `gtf` via --gtf (not a cache) so Gene/Feature match
   # the consumer. Transcript-level — joined into annotations.parquet on (variant_id, transcript).
@@ -52,7 +53,6 @@ additional:                  # tools that RE-ANNOTATE fastvep/small.vcf.gz (smal
     distance: 5000                               # VEP's own --distance (native); typically = fastvep.distance
     plugin_dir: /path/to/ensembl-vep/Plugins     # cloned Ensembl/VEP_plugins
     fork: 8
-    variants_per_chunk: 500000                   # VEP scatter granularity (1 Slurm job / chunk)
     plugin_data:                                 # download separately; see README
       cadd_snv:      /path/to/cadd/whole_genome_SNVs.tsv.gz
       cadd_indel:    /path/to/cadd/gnomad.genomes.r3.0.indel.tsv.gz

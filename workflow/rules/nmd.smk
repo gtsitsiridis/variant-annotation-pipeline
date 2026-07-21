@@ -5,11 +5,10 @@ escape rules (last-exon, 50nt-penultimate, long-exon, start-proximal, single-exo
 Refines the pLoF signal beyond LOFTEE (an NMD-escaping stop_gained keeps a truncated protein; an
 NMD-triggering one degrades the transcript).
 
-Runs on fastVEP's filtered VCF -> parts/nmd.parquet (variant_id, transcript + NMD flags); combine
-joins it onto the base on (variant_id, transcript). Opt-in via `additional.nmd.enabled`. We request
-CSV output: NMD-Scanner's parquet writer chokes on a mixed-type column (`ref_all_stop_codons`), and
-we only keep a few boolean columns downstream. (Single job on the filtered subset; chunk like VEP
-if it becomes a straggler.)
+Scattered over the SHARED chunk_vcf chunks (chunk.smk) — one nmd-scanner per chunk, like VEP — then
+merged to parts/nmd.parquet (a single job over all 20M variants OOMs). Combine joins it onto the base
+on (variant_id, transcript). Opt-in via `additional.nmd.enabled`. We request CSV output: NMD-Scanner's
+parquet writer chokes on a mixed-type column (`ref_all_stop_codons`), and we keep only booleans.
 """
 
 _NMD = config["additional"]["nmd"]
@@ -24,18 +23,18 @@ NMD_COLS = [
 
 
 rule nmd:
-    """NMD-Scanner on the filtered VCF -> wide CSV (temp)."""
+    """NMD-Scanner on ONE variant chunk -> wide CSV (temp)."""
     input:
-        vcf=FASTVEP_FILTERED_VCF,
+        vcf=CHUNKS / "chunk_{chunk}.vcf.gz",
         gtf=config["gtf"],
         fasta=config["fasta"],
     output:
-        csv=temp(OUT / "nmd" / "nmd.csv"),
+        csv=temp(OUT / "nmd" / "chunk_{chunk}.nmd.csv"),
     params:
         reassign=_REASSIGN,
     resources:
-        mem_mb=_NMD.get("mem_mb", 32000),
-        runtime=_NMD.get("runtime", 720),
+        mem_mb=_NMD.get("mem_mb", 16000),
+        runtime=_NMD.get("runtime", 240),
     conda:
         "../../envs/nmd.yaml"
     shell:
@@ -43,23 +42,30 @@ rule nmd:
         "  --output {output.csv} {params.reassign}"
 
 
-rule parse_nmd:
-    """NMD CSV -> parts/nmd.parquet, keyed on (variant_id, transcript) for the combine join."""
+def _nmd_chunk_csvs(wildcards):
+    return expand(str(OUT / "nmd" / "chunk_{chunk}.nmd.csv"), chunk=chunk_ids())
+
+
+rule nmd_parquet:
+    """Concat per-chunk NMD CSVs -> parts/nmd.parquet, keyed on (variant_id, transcript)."""
     input:
-        csv=OUT / "nmd" / "nmd.csv",
+        csvs=_nmd_chunk_csvs,
     output:
         parquet=PARTS / "nmd.parquet",
     run:
         import polars as pl
-        lf = pl.scan_csv(input.csv)             # project only the columns we keep (skip messy wide cols)
-        have = set(lf.collect_schema().names())
-        keep = [c for c in NMD_COLS if c in have]
-        (lf.select(
-            # variant_id = chrom_start_ref_alt (start_variant is already 0-based POS-1, == our key).
-            variant_id=pl.concat_str([
-                pl.col("chromosome"),
-                pl.col("start_variant").cast(pl.Int64, strict=False).cast(pl.String),
-                pl.col("ref"), pl.col("alt")], separator="_"),
-            transcript=pl.col("transcript_id"),
-            *[(pl.col(c).cast(pl.String).str.to_lowercase() == "true").alias(c) for c in keep],
-        ).sink_parquet(output.parquet))
+        frames = []
+        for p in input.csvs:
+            lf = pl.scan_csv(p)                 # project only the kept columns (skip messy wide cols)
+            have = set(lf.collect_schema().names())
+            keep = [c for c in NMD_COLS if c in have]
+            frames.append(lf.select(
+                # variant_id = chrom_start_ref_alt (start_variant is 0-based POS-1, == our key)
+                variant_id=pl.concat_str([
+                    pl.col("chromosome"),
+                    pl.col("start_variant").cast(pl.Int64, strict=False).cast(pl.String),
+                    pl.col("ref"), pl.col("alt")], separator="_"),
+                transcript=pl.col("transcript_id"),
+                *[(pl.col(c).cast(pl.String).str.to_lowercase() == "true").alias(c) for c in keep],
+            ))
+        pl.concat(frames).sink_parquet(output.parquet)

@@ -61,9 +61,10 @@ come from `transcript_metadata` (joined in the base).
 `config.yaml` is the template (copy to `config.local.yaml`, or pass config via the `module` block):
 - `fastvep: { distance, protein_coding_only, canonical_only, include_sv, scratch, parse_memory_limit,
   parse_threads }` — the always-on driver + its filters.
-- `additional: { vep, nmd, e2g, absplice }` — each `{ enabled: false, … }`. `vep` carries `distance` (its
-  own `--distance`) + `plugin_dir`/`fork`/`variants_per_chunk`/`plugin_data{…}`; `nmd` a `reassign_exons`
-  flag; `e2g` the ENCODE-rE2G tables + `distance_to_tss`; `absplice` a precomputed `result`.
+- `additional: { variants_per_chunk, vep, nmd, e2g, absplice }`. `variants_per_chunk` is the **shared**
+  VEP/NMD `chunk_vcf` scatter size. Each tool is `{ enabled: false, … }`: `vep` carries `distance` (its
+  own `--distance`) + `plugin_dir`/`fork`/`plugin_data{…}`; `nmd` a `reassign_exons` flag; `e2g` the
+  ENCODE-rE2G tables + `distance_to_tss`; `absplice` a precomputed `result`.
 - No `include_sv` outside `fastvep` (the Snakefile errors if set on an additional tool).
 
 ## Usage — standalone

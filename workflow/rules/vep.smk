@@ -19,16 +19,8 @@ VEP_CFG = config["additional"]["vep"]
 VEP_PD = VEP_CFG["plugin_data"]
 VEP_DISTANCE = VEP_CFG.get("distance", FASTVEP_DISTANCE)   # VEP's own --distance (native)
 REF = OUT / "ref"
-CHUNKS = OUT / "vcf"                     # chunk_vcf writes chunk_NNNNN.vcf.gz here
-CHUNK_SIZE = int(VEP_CFG.get("variants_per_chunk", 500_000))
-# Optional chromosome filter applied before chunking ([] / unset = the whole filtered VCF).
-_REGION = ("-r " + ",".join(config["chromosomes"])) if config.get("chromosomes") else ""
-
-
-def chunk_ids():
-    """Resolve the dynamic chunk wildcards produced by the chunk_vcf checkpoint."""
-    cdir = checkpoints.chunk_vcf.get().output.chunkdir
-    return sorted(glob_wildcards(os.path.join(cdir, "chunk_{chunk}.vcf.gz")).chunk)
+# CHUNKS / CHUNK_SIZE / chunk_ids() + the chunk_vcf checkpoint live in chunk.smk (shared with NMD),
+# included before this file.
 
 
 def _have(*paths) -> bool:
@@ -83,35 +75,6 @@ rule prepare_gtf:
         r"(zcat {input.gtf} | grep ^'#'; "
         r" zcat {input.gtf} | grep -v ^'#' | sort -k1,1 -k4,4n) "
         r" | bgzip > {output.gtf} && tabix -p gff {output.gtf}"
-
-
-checkpoint chunk_vcf:
-    """Split the fastVEP-filtered VCF into fixed-size bgzipped chunks of
-    `additional.vep.variants_per_chunk` variants each (header re-attached, tabix-indexed)."""
-    input:
-        vcf=FASTVEP_FILTERED_VCF,
-    output:
-        chunkdir=directory(CHUNKS),
-    params:
-        region=_REGION,
-        n=CHUNK_SIZE,
-    conda:
-        "../../envs/vep.yaml"
-    shell:
-        r"""
-        mkdir -p {output.chunkdir}
-        hdr={output.chunkdir}/.header.vcf
-        bcftools view -h {input.vcf} > "$hdr"
-        bcftools view -H {params.region} {input.vcf} \
-          | split -l {params.n} -d -a 5 - {output.chunkdir}/body_
-        for b in {output.chunkdir}/body_*; do
-            idx=${{b##*body_}}
-            cat "$hdr" "$b" | bgzip > {output.chunkdir}/chunk_$idx.vcf.gz
-            tabix -p vcf {output.chunkdir}/chunk_$idx.vcf.gz
-            rm -f "$b"
-        done
-        rm -f "$hdr"
-        """
 
 
 rule vep:
