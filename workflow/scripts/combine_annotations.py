@@ -31,6 +31,19 @@ _E2G_DROP = {"variant_id", "target_gene_id"}
 _E2G_PREFIX = "e2g_"
 _ABSPLICE_DROP = {"variant_id", "gene"}
 
+# Consequence terms one-hot encoded from the fastVEP base `consequence` (same set as parse_vep.py),
+# so annotations.parquet has a consistent Consequence_* schema across ALL variant_types (not just the
+# near-gene subset VEP annotates). Derived here (not in parse_fastvep) so it doesn't force a re-parse
+# + the whole downstream cascade. `consequence` is '&'-joined for multi-consequence rows -> LIKE matches.
+_CONSEQUENCES = [
+    "splice_acceptor_variant", "splice_donor_variant", "splice_region_variant",
+    "stop_gained", "stop_lost", "start_lost", "frameshift_variant",
+    "inframe_insertion", "inframe_deletion", "missense_variant",
+    "protein_altering_variant", "synonymous_variant",
+    "5_prime_UTR_variant", "3_prime_UTR_variant",
+    "upstream_gene_variant", "downstream_gene_variant", "intron_variant",
+]
+
 
 def _cols(con, path):
     return [r[0] for r in con.execute(
@@ -52,9 +65,14 @@ def main(fastvep: str, out_dir: str, vep=None, nmd=None, e2g=None, absplice=None
     con.execute("PRAGMA preserve_insertion_order=false")
     con.execute(f"PRAGMA temp_directory='{tmp}'")
 
-    selects, joins = ["b.*"], []
+    onehot = [f"CASE WHEN b.consequence LIKE '%{t}%' THEN 1 ELSE 0 END AS \"Consequence_{t}\""
+              for t in _CONSEQUENCES]
+    selects, joins = ["b.*", *onehot], []
     if vep:
-        extra = [c for c in _cols(con, vep) if c not in _VEP_DROP]
+        # base (fastVEP) now owns Consequence + the Consequence_* one-hots for ALL variant_types;
+        # drop VEP's copies to avoid a column collision.
+        extra = [c for c in _cols(con, vep)
+                 if c not in _VEP_DROP and not c.startswith("Consequence")]
         selects += [f'vep."{c}"' for c in extra]
         joins.append(f"LEFT JOIN read_parquet('{vep}') vep "
                      f'ON b.variant_id = vep.variant_id AND b.transcript = vep."Feature"')

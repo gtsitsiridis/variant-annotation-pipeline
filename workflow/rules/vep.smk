@@ -46,12 +46,15 @@ def _plugin_args() -> str:
         specs.append(f"--plugin PrimateAI,{pd['primateai']}")
     if _have(pd["alphamissense"]):
         specs.append(f"--plugin AlphaMissense,file={pd['alphamissense']}")
-    if _have(pd["loftee_human_ancestor"], pd["loftee_conservation"], pd["loftee_gerp"]):
+    if _have(pd["loftee_human_ancestor"], pd["loftee_conservation"]):
+        # gerp_bigwig is DROPPED on purpose: LOFTEE's GERP filter needs Bio::DB::BigWig, which has no
+        # clean conda package, so passing it makes the LoF plugin fail to load. LOFTEE runs fine
+        # without GERP (an optional filter). Re-add `,gerp_bigwig:{pd['loftee_gerp']}` once
+        # Bio::DB::BigWig is installed in envs/vep.yaml.
         specs.append(
             f"--plugin LoF,loftee_path:{pd['loftee_path']},"
             f"human_ancestor_fa:{pd['loftee_human_ancestor']},"
-            f"conservation_file:{pd['loftee_conservation']},"
-            f"gerp_bigwig:{pd['loftee_gerp']}")
+            f"conservation_file:{pd['loftee_conservation']}")
     skipped = {"CADD", "SpliceAI", "PrimateAI", "AlphaMissense", "LoF"} - {
         s.split(",")[0].split()[-1] for s in specs}
     if skipped:
